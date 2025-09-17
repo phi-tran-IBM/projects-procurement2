@@ -1,0 +1,948 @@
+
+openapi: 3.0.3
+info:
+  title: Procurement RAG Agent API
+  description: |
+    Enhanced Procurement Analysis API with intelligent hybrid RAG system supporting:
+    - Dynamic vendor lookup (no hardcoding)
+    - Category-based analysis and supplier recommendations
+    - SQL and semantic search capabilities
+    - Advanced query classification and routing
+    
+    **Key Features:**
+    - Handles category questions like "top vendor for laptops"
+    - Supplier recommendations: "what supplier should I use for chairs?"
+    - Dynamic fuzzy vendor matching
+    - Enhanced query classification with 7 types
+    - Comprehensive caching system
+  version: 2.0.0
+  contact:
+    name: Procurement RAG Agent
+    email: support@example.com
+
+servers:
+  - url: https://watsonx.orchestrate-procurement.ngrok.app
+    description: Procurement RAG API via ngrok
+
+tags:
+  - name: Core
+    description: Main query endpoints
+  - name: Category Analysis
+    description: Product category analysis and recommendations
+  - name: Vendor Management
+    description: Dynamic vendor lookup and search
+  - name: Analysis
+    description: Query classification and statistics
+  - name: Administration
+    description: Health, cache, and system management
+
+paths:
+  # ============================================
+  # CORE ENDPOINTS
+  # ============================================
+  /ask:
+    post:
+      tags: [Core]
+      summary: Main Query Endpoint (Enhanced Hybrid System)
+      description: |
+        Primary endpoint using intelligent hybrid system with enhanced capabilities:
+        - Category-based queries (e.g., "top vendor for laptops")
+        - Supplier recommendations (e.g., "best supplier for office chairs")
+        - Dynamic vendor matching without hardcoded names
+        - Automatic SQL vs RAG routing with 7 query types
+        - Built-in caching and optimization
+      operationId: askQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: Natural language procurement question
+                  example: "What is our top vendor for laptops?"
+                verify:
+                  type: boolean
+                  description: Include verification analysis
+                  default: false
+            examples:
+              category_query:
+                summary: Category-based query
+                value:
+                  question: "What is our top vendor for laptops?"
+              supplier_recommendation:
+                summary: Supplier recommendation
+                value:
+                  question: "What supplier should I use for office chairs?"
+              category_analysis:
+                summary: Category analysis
+                value:
+                  question: "What category has the highest number of orders?"
+              general_query:
+                summary: General procurement query
+                value:
+                  question: "What is our total spending this year?"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ask-with-mode:
+    post:
+      tags: [Core]
+      summary: Query with Forced Mode
+      description: |
+        Execute query with specific mode forcing:
+        - 'sql': Force SQL execution for structured queries
+        - 'rag': Force semantic search for unstructured queries  
+        - 'auto': Use intelligent routing (default)
+      operationId: askWithMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: Natural language procurement question
+                mode:
+                  type: string
+                  enum: [sql, rag, auto]
+                  default: auto
+                  description: Force specific execution mode
+            examples:
+              force_sql:
+                summary: Force SQL mode
+                value:
+                  question: "List top 5 vendors by spending"
+                  mode: "sql"
+              force_rag:
+                summary: Force RAG mode  
+                value:
+                  question: "Tell me about unusual procurement patterns"
+                  mode: "rag"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/QueryResponse'
+                  - type: object
+                    properties:
+                      mode:
+                        type: string
+                        description: Execution mode used
+        '400':
+          description: Query not suitable for forced mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================
+  # CATEGORY ANALYSIS ENDPOINTS (NEW)
+  # ============================================
+  /categories:
+    get:
+      tags: [Category Analysis]
+      summary: List All Product Categories
+      description: |
+        Get comprehensive list of all product categories with statistics.
+        Supports sorting by order count or total spending.
+      operationId: getCategories
+      parameters:
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [orders, spending]
+            default: orders
+          description: Sort categories by order count or spending
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum number of categories to return
+      responses:
+        '200':
+          description: List of product categories
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CategoryInfo'
+                  count:
+                    type: integer
+                    description: Number of categories returned
+                  sorted_by:
+                    type: string
+                    description: Sorting method used
+                  total_categories:
+                    type: integer
+                    description: Total categories available
+        '404':
+          description: No categories found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /categories/{categoryName}/vendors:
+    get:
+      tags: [Category Analysis]
+      summary: Get Vendors for Specific Category
+      description: |
+        Find all vendors that supply products in a specific category.
+        Uses fuzzy matching for category names.
+      operationId: getVendorsForCategory
+      parameters:
+        - name: categoryName
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Product category name (supports partial matches)
+          example: "laptop"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+          description: Maximum number of vendors to return
+      responses:
+        '200':
+          description: Vendors for the category
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category_search:
+                    type: string
+                    description: Category search term used
+                  vendors:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CategoryVendorInfo'
+                  count:
+                    type: integer
+                    description: Number of vendors found
+        '404':
+          description: No vendors found for category
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      suggestion:
+                        type: string
+                        description: Helpful suggestion for user
+
+  # ============================================
+  # DYNAMIC VENDOR ENDPOINTS
+  # ============================================
+  /vendor/{vendorName}:
+    get:
+      tags: [Vendor Management]
+      summary: Get Vendor Details (Dynamic Matching)
+      description: |
+        Get comprehensive vendor details using intelligent fuzzy matching.
+        Works with ANY vendor name without hardcoding (e.g., IBM, Dell, etc.).
+        Automatically handles name variations and provides similarity scores.
+      operationId: getVendorDetails
+      parameters:
+        - name: vendorName
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Vendor name (supports fuzzy matching)
+          example: "IBM"
+        - name: similarity
+          in: query
+          schema:
+            type: number
+            minimum: 0.3
+            maximum: 1.0
+            default: 0.7
+          description: Minimum similarity threshold for matching
+      responses:
+        '200':
+          description: Vendor details with matching information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorDetails'
+        '404':
+          description: Vendor not found
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      search_performed:
+                        type: string
+                        description: Search parameters used
+                      suggestions:
+                        type: array
+                        items:
+                          type: string
+                        description: Similar vendor names found
+                      suggestion_count:
+                        type: integer
+                      help:
+                        type: string
+                        description: Helpful usage instructions
+
+  /vendors/search:
+    get:
+      tags: [Vendor Management]
+      summary: Search Vendors with Fuzzy Matching
+      description: |
+        Search for vendors using intelligent fuzzy matching algorithm.
+        Returns similarity scores and procurement statistics.
+      operationId: searchVendors
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+          description: Search term for vendor names
+          example: "International Business"
+        - name: similarity
+          in: query
+          schema:
+            type: number
+            minimum: 0.1
+            maximum: 1.0
+            default: 0.5
+          description: Minimum similarity threshold
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum results to return
+      responses:
+        '200':
+          description: Vendor search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  search_term:
+                    type: string
+                  vendors:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VendorSearchResult'
+                  count:
+                    type: integer
+                  similarity_threshold:
+                    type: number
+                  total_found:
+                    type: integer
+                  suggestions:
+                    type: array
+                    items:
+                      type: string
+                    description: Alternative suggestions if no matches
+        '400':
+          description: Invalid search parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vendors/match-test:
+    post:
+      tags: [Vendor Management]
+      summary: Test Vendor Matching Algorithm
+      description: |
+        Debug endpoint to test how the fuzzy matching algorithm works.
+        Useful for understanding similarity scores and matching behavior.
+      operationId: testVendorMatching
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [search_term]
+              properties:
+                search_term:
+                  type: string
+                  description: Term to test matching against
+                  example: "IBM"
+                threshold:
+                  type: number
+                  minimum: 0.1
+                  maximum: 1.0
+                  default: 0.3
+                  description: Similarity threshold for testing
+      responses:
+        '200':
+          description: Detailed matching analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchTestResult'
+
+  # ============================================
+  # ANALYSIS ENDPOINTS
+  # ============================================
+  /classify:
+    post:
+      tags: [Analysis]
+      summary: Classify Query Type (Enhanced)
+      description: |
+        Classify query without executing it. Now supports 7 query types:
+        - aggregation, ranking, comparison, specific_lookup
+        - category_analysis (NEW)
+        - supplier_recommendation (NEW)  
+        - semantic_search
+      operationId: classifyQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: Question to classify
+            examples:
+              category_analysis:
+                summary: Category analysis query
+                value:
+                  question: "What category has the most orders?"
+              supplier_recommendation:
+                summary: Supplier recommendation query
+                value:
+                  question: "What supplier should I use for laptops?"
+      responses:
+        '200':
+          description: Query classification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryClassification'
+
+  /stats:
+    get:
+      tags: [Analysis]
+      summary: Enhanced Database Statistics
+      description: |
+        Get comprehensive database statistics including:
+        - Total records, vendors, categories
+        - Top vendors and categories
+        - ChromaDB status
+      operationId: getStats
+      responses:
+        '200':
+          description: Database statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseStats'
+
+  /top-vendors:
+    get:
+      tags: [Analysis]
+      summary: Get Top Vendors by Spending
+      description: Direct SQL query for top vendors by total spending
+      operationId: getTopVendors
+      parameters:
+        - name: n
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          description: Number of top vendors to return
+      responses:
+        '200':
+          description: Top vendors list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  top_vendors:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TopVendorInfo'
+                  total_combined:
+                    type: number
+                    description: Combined spending of returned vendors
+                  count:
+                    type: integer
+
+  # ============================================
+  # ADMINISTRATION ENDPOINTS
+  # ============================================
+  /health:
+    get:
+      tags: [Administration]
+      summary: System Health Check
+      description: |
+        Comprehensive health check including:
+        - SQL database status
+        - ChromaDB connectivity  
+        - Cache systems status
+        - New features status (dynamic matching, categories)
+      operationId: getHealth
+      responses:
+        '200':
+          description: System health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /cache/clear:
+    post:
+      tags: [Administration]
+      summary: Clear All Caches
+      description: |
+        Clear all system caches including:
+        - Query result cache
+        - Vendor similarity cache
+        - LRU function caches
+      operationId: clearCache
+      responses:
+        '200':
+          description: Cache cleared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "All caches cleared successfully"
+        '500':
+          description: Failed to clear cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cache/stats:
+    get:
+      tags: [Administration]
+      summary: Get Cache Statistics
+      description: Statistics from all caching systems
+      operationId: getCacheStats
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStats'
+
+  /verify:
+    post:
+      tags: [Analysis]
+      summary: Verify Response Accuracy
+      description: Verify an existing response for accuracy (if verification module available)
+      operationId: verifyResponse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, response]
+              properties:
+                question:
+                  type: string
+                  description: Original question
+                response:
+                  type: string
+                  description: Response to verify
+      responses:
+        '200':
+          description: Verification results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        '503':
+          description: Verification module not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+# ============================================
+# COMPONENT SCHEMAS
+# ============================================
+components:
+  schemas:
+    QueryResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          description: Data source used (SQL, Discovery/RAG, Hybrid)
+          example: "SQL"
+        query_type:
+          type: string
+          description: Classified query type
+          enum: [aggregation, ranking, comparison, specific_lookup, category_analysis, supplier_recommendation, semantic_search]
+        answer:
+          type: string
+          description: Main response answer
+        summary:
+          type: string
+          description: Summary of the response
+        formatted_answer:
+          type: string
+          description: Formatted answer for display
+        records_analyzed:
+          type: integer
+          description: Number of records analyzed
+        cache_hit:
+          type: boolean
+          description: Whether result came from cache
+        sub_queries:
+          type: integer
+          description: Number of sub-queries for complex queries
+        verification:
+          $ref: '#/components/schemas/VerificationInfo'
+
+    CategoryInfo:
+      type: object
+      properties:
+        category:
+          type: string
+          description: Category name
+          example: "COMPUTER EQUIPMENT"
+        order_count:
+          type: integer
+          description: Number of orders in this category
+        total_spending:
+          type: number
+          description: Total spending for this category
+        avg_order_value:
+          type: number
+          description: Average order value
+        unique_vendors:
+          type: integer
+          description: Number of unique vendors in category
+
+    CategoryVendorInfo:
+      type: object
+      properties:
+        vendor:
+          type: string
+          description: Vendor name
+        item_count:
+          type: integer
+          description: Number of items supplied
+        total_spending:
+          type: number
+          description: Total spending with this vendor
+        avg_price:
+          type: number
+          description: Average price per item
+        min_price:
+          type: number
+          description: Minimum price
+        max_price:
+          type: number
+          description: Maximum price
+
+    VendorDetails:
+      type: object
+      properties:
+        searched_vendor:
+          type: string
+          description: Vendor name searched for
+        total_spending:
+          type: number
+          description: Total spending with this vendor
+        order_count:
+          type: integer
+          description: Number of orders
+        avg_order:
+          type: number
+          description: Average order value
+        min_order:
+          type: number
+        max_order:
+          type: number
+        vendor_variations:
+          type: integer
+          description: Number of name variations found
+        categories_served:
+          type: integer
+          description: Number of different categories
+        top_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryInfo'
+        sample_vendor_names:
+          type: array
+          items:
+            type: string
+          description: Sample of actual vendor name variations
+        matching_info:
+          type: object
+          properties:
+            best_match:
+              type: string
+              description: Best matching vendor name
+            best_similarity_score:
+              type: number
+              description: Similarity score (0-1)
+            total_matches_found:
+              type: integer
+            similarity_threshold_used:
+              type: number
+
+    VendorSearchResult:
+      type: object
+      properties:
+        vendor_name:
+          type: string
+        similarity_score:
+          type: number
+          description: Similarity score (0-1)
+        order_count:
+          type: integer
+        total_spending:
+          type: number
+
+    MatchTestResult:
+      type: object
+      properties:
+        search_term:
+          type: string
+        normalized_search_term:
+          type: string
+        threshold:
+          type: number
+        total_vendors_in_db:
+          type: integer
+        matches_found:
+          type: integer
+        detailed_matches:
+          type: array
+          items:
+            type: object
+            properties:
+              original_vendor:
+                type: string
+              normalized_vendor:
+                type: string
+              similarity_score:
+                type: number
+              normalized_search:
+                type: string
+
+    QueryClassification:
+      type: object
+      properties:
+        question:
+          type: string
+        query_type:
+          type: string
+          enum: [aggregation, ranking, comparison, specific_lookup, category_analysis, supplier_recommendation, semantic_search]
+        recommended_approach:
+          type: string
+          enum: [SQL, RAG]
+        description:
+          type: string
+        context:
+          type: string
+          description: Additional context about the classification
+
+    DatabaseStats:
+      type: object
+      properties:
+        total_records:
+          type: integer
+        unique_vendors:
+          type: integer
+        unique_categories:
+          type: integer
+        total_spending:
+          type: number
+        average_order_value:
+          type: number
+        top_vendors:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopVendorInfo'
+        top_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryInfo'
+        chromadb_records:
+          oneOf:
+            - type: integer
+            - type: string
+              enum: [unavailable]
+        timestamp:
+          type: string
+          format: date-time
+
+    TopVendorInfo:
+      type: object
+      properties:
+        vendor:
+          type: string
+        total_spending:
+          type: number
+        order_count:
+          type: integer
+        avg_order:
+          type: number
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        service:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        components:
+          type: object
+          properties:
+            sql_database:
+              $ref: '#/components/schemas/ComponentHealth'
+            chromadb:
+              $ref: '#/components/schemas/ComponentHealth'
+            cache:
+              $ref: '#/components/schemas/ComponentHealth'
+            dynamic_vendor_matching:
+              $ref: '#/components/schemas/ComponentHealth'
+            category_analysis:
+              $ref: '#/components/schemas/ComponentHealth'
+            verification:
+              $ref: '#/components/schemas/ComponentHealth'
+
+    ComponentHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy, enabled, available, not configured]
+        records:
+          type: integer
+          description: Number of records (if applicable)
+        error:
+          type: string
+          description: Error message (if unhealthy)
+        threshold:
+          type: number
+          description: Configuration threshold (if applicable)
+
+    CacheStats:
+      type: object
+      properties:
+        cached_items:
+          type: integer
+        keys:
+          type: array
+          items:
+            type: string
+        memory_estimate_kb:
+          type: number
+        vendor_cache_size:
+          type: integer
+          description: Size of vendor similarity cache
+
+    VerificationInfo:
+      type: object
+      properties:
+        confidence_score:
+          type: number
+          description: Confidence score (0-1)
+        checks_performed:
+          type: integer
+        discrepancies:
+          type: integer
+        error:
+          type: string
+          description: Error message if verification failed
+
+    VerificationResult:
+      type: object
+      properties:
+        confidence_score:
+          type: number
+        verification_type:
+          type: string
+        checks:
+          type: integer
+        discrepancies:
+          type: array
+          items:
+            type: string
+        report:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+        suggestion:
+          type: string
+          description: Helpful suggestion (if applicable)
+        help:
+          type: string
+          description: Usage help (if applicable)
