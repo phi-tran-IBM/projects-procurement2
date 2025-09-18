@@ -1,6 +1,7 @@
 """
-rag_logic.py - Enhanced RAG Module with Advanced Prompt Engineering
+rag_logic.py - Enhanced RAG Module with Grounded Prompts and Tiered Search
 Provides semantic search and natural language understanding for procurement queries
+UPDATED: Support for template-based prompts and dual parsing modes
 """
 
 from dotenv import load_dotenv
@@ -24,16 +25,34 @@ from langchain.memory import ConversationSummaryMemory
 # Import discovery store for vector search
 from discovery_store import collection
 
-# --- MODIFIED: Import new specialized model constant ---
+# Import from updated constants (using centralized configuration)
 from constants import (
     WATSONX_URL, WATSONX_PROJECT_ID, WATSONX_API_KEY,
-    SYNTHESIS_MODEL,  # Changed from LLM_MODEL
-    VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL
+    SYNTHESIS_MODEL,  # Using the powerful model for synthesis
+    VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL,
+    # NEW: Import dynamic prompt functions
+    get_grounded_synthesis_prompt, get_grounded_comparison_prompt,
+    get_grounded_recommendation_prompt, get_grounded_statistical_prompt,
+    # Import template prompts for direct use if needed
+    GROUNDED_SYNTHESIS_PROMPT_TEMPLATE, GROUNDED_COMPARISON_PROMPT_TEMPLATE,
+    GROUNDED_RECOMMENDATION_PROMPT_TEMPLATE, GROUNDED_STATISTICAL_PROMPT_TEMPLATE,
+    # Import tiered search configuration
+    SEMANTIC_SEARCH_TIERS, STRATEGIC_TERM_MAPPINGS,
+    # Import quality thresholds
+    QUALITY_THRESHOLDS, MIN_DATA_REQUIREMENTS, INSUFFICIENT_DATA_MESSAGES,
+    # Features and caching
+    FEATURES, CACHE_TTL_BY_TYPE, CACHE_KEY_PREFIXES
 )
 
-# ============================================
-# IMPORT QUERY DECOMPOSER
-# ============================================
+# Import VendorResolver if available
+try:
+    from hybrid_rag_architecture import get_vendor_resolver
+    VENDOR_RESOLVER_AVAILABLE = True
+except ImportError:
+    VENDOR_RESOLVER_AVAILABLE = False
+    get_vendor_resolver = None
+
+# Import query decomposer for entity extraction (already has unified analysis)
 try:
     from query_decomposer import (
         get_decomposer, decompose_query, generate_response,
@@ -43,21 +62,176 @@ try:
 except ImportError:
     DECOMPOSER_AVAILABLE = False
 
+# Import cache if available
+try:
+    from simple_cache import QueryCache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+    QueryCache = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================
+# TEMPLATE RESPONSE EXTRACTION UTILITIES
+# ============================================
+
+def extract_template_content(response_text: str) -> str:
+    """
+    Extract readable content from template-formatted LLM responses.
+    Handles various template formats used in the grounded prompts.
+    """
+    if not response_text or not isinstance(response_text, str):
+        return response_text
+    
+    # Check if template parsing is enabled
+    if not FEATURES.get('template_parsing', False):
+        return response_text
+    
+    # Try to extract based on template markers
+    
+    # For synthesis responses
+    if '<ANSWER>' in response_text:
+        match = re.search(r'<ANSWER>(.*?)</ANSWER>', response_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    
+    # For recommendation responses
+    if '<RECOMMENDATIONS_START>' in response_text or '<REC1>' in response_text:
+        return extract_recommendations_from_template(response_text)
+    
+    # For comparison responses
+    if '<COMPARISON_START>' in response_text or '<VENDOR1>' in response_text:
+        return extract_comparison_from_template(response_text)
+    
+    # For statistical responses
+    if '<STATISTICAL_ANALYSIS>' in response_text or '<FINDING1>' in response_text:
+        return extract_statistics_from_template(response_text)
+    
+    # For insufficient data responses
+    if '<INSUFFICIENT_DATA>' in response_text:
+        match = re.search(r'<INSUFFICIENT_DATA>(.*?)</INSUFFICIENT_DATA>', 
+                         response_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    
+    # Fallback: remove all template tags
+    cleaned = re.sub(r'<[^>]+>', '', response_text)
+    return cleaned.strip()
+
+def extract_recommendations_from_template(response_text: str) -> str:
+    """Extract recommendations from template format"""
+    recommendations = []
+    
+    # Check for insufficient data
+    insufficient_match = re.search(r'<INSUFFICIENT_DATA>(.*?)</INSUFFICIENT_DATA>', 
+                                 response_text, re.IGNORECASE | re.DOTALL)
+    if insufficient_match:
+        return insufficient_match.group(1).strip()
+    
+    # Extract numbered recommendations
+    for i in range(1, 11):
+        rec_pattern = f'<REC{i}>\\s*<ACTION>(.*?)</ACTION>\\s*<JUSTIFICATION>(.*?)</JUSTIFICATION>\\s*(?:<PRIORITY>(.*?)</PRIORITY>)?\\s*</REC{i}>'
+        match = re.search(rec_pattern, response_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            action = match.group(1).strip()
+            justification = match.group(2).strip()
+            priority = match.group(3).strip() if match.group(3) else "Medium"
+            recommendations.append(f"**{i}. {action}** (Priority: {priority})\n   - {justification}")
+    
+    if recommendations:
+        return "### Strategic Recommendations\n\n" + "\n\n".join(recommendations)
+    
+    # Fallback
+    return re.sub(r'<[^>]+>', '', response_text).strip()
+
+def extract_comparison_from_template(response_text: str) -> str:
+    """Extract comparison from template format"""
+    result = []
+    
+    # Extract summary
+    summary_match = re.search(r'<SUMMARY>(.*?)</SUMMARY>', response_text, re.IGNORECASE | re.DOTALL)
+    if summary_match:
+        result.append(f"**Summary:** {summary_match.group(1).strip()}\n")
+    
+    # Extract vendor details
+    for i in range(1, 11):
+        vendor_pattern = f'<VENDOR{i}>\\s*<NAME>(.*?)</NAME>\\s*<PERFORMANCE>(.*?)</PERFORMANCE>\\s*(?:<STRENGTHS>(.*?)</STRENGTHS>)?\\s*(?:<CONCERNS>(.*?)</CONCERNS>)?\\s*</VENDOR{i}>'
+        match = re.search(vendor_pattern, response_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            name = match.group(1).strip()
+            performance = match.group(2).strip()
+            strengths = match.group(3).strip() if match.group(3) else ""
+            concerns = match.group(4).strip() if match.group(4) else ""
+            
+            result.append(f"### {name}")
+            result.append(f"- **Performance:** {performance}")
+            if strengths:
+                result.append(f"- **Strengths:** {strengths}")
+            if concerns:
+                result.append(f"- **Concerns:** {concerns}")
+            result.append("")
+    
+    # Extract recommendation
+    rec_match = re.search(r'<RECOMMENDATION>(.*?)</RECOMMENDATION>', response_text, re.IGNORECASE | re.DOTALL)
+    if rec_match:
+        result.append(f"**Recommendation:** {rec_match.group(1).strip()}")
+    
+    if result:
+        return "\n".join(result)
+    
+    return re.sub(r'<[^>]+>', '', response_text).strip()
+
+def extract_statistics_from_template(response_text: str) -> str:
+    """Extract statistical analysis from template format"""
+    result = []
+    
+    # Extract summary
+    summary_match = re.search(r'<SUMMARY>(.*?)</SUMMARY>', response_text, re.IGNORECASE | re.DOTALL)
+    if summary_match:
+        result.append(f"**Summary:** {summary_match.group(1).strip()}\n")
+    
+    # Extract findings
+    findings = []
+    for i in range(1, 11):
+        finding_pattern = f'<FINDING{i}>(.*?)</FINDING{i}>'
+        match = re.search(finding_pattern, response_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            findings.append(f"- {match.group(1).strip()}")
+    
+    if findings:
+        result.append("**Key Findings:**")
+        result.extend(findings)
+        result.append("")
+    
+    # Extract business impact
+    impact_match = re.search(r'<BUSINESS_IMPACT>(.*?)</BUSINESS_IMPACT>', response_text, re.IGNORECASE | re.DOTALL)
+    if impact_match:
+        result.append(f"**Business Impact:** {impact_match.group(1).strip()}\n")
+    
+    # Extract recommendations
+    rec_match = re.search(r'<RECOMMENDATIONS>(.*?)</RECOMMENDATIONS>', response_text, re.IGNORECASE | re.DOTALL)
+    if rec_match:
+        result.append(f"**Recommendations:** {rec_match.group(1).strip()}")
+    
+    if result:
+        return "\n".join(result)
+    
+    return re.sub(r'<[^>]+>', '', response_text).strip()
 
 # ============================================
 # ENHANCED RAG PROCESSOR
 # ============================================
 
 class EnhancedRAGProcessor:
-    """Advanced RAG processor with improved prompt engineering and semantic understanding"""
+    """Advanced RAG processor with grounded prompts and tiered search"""
     
     def __init__(self):
         """Initialize the enhanced RAG processor"""
         try:
-            # --- MODIFIED: Initialize LLM with the powerful SYNTHESIS_MODEL ---
+            # Initialize LLM with SYNTHESIS_MODEL for high-quality responses
             self.llm = ChatWatsonx(
                 model_id=SYNTHESIS_MODEL,
                 url=WATSONX_URL,
@@ -66,7 +240,7 @@ class EnhancedRAGProcessor:
                 params={
                     "decoding_method": "greedy",
                     "max_new_tokens": 800,
-                    "temperature": 0.3,  # Slightly higher for more natural responses
+                    "temperature": 0.3,
                     "top_p": 0.95,
                     "repetition_penalty": 1.1
                 }
@@ -75,13 +249,22 @@ class EnhancedRAGProcessor:
             # Initialize conversation memory for context
             self.memory = ConversationSummaryMemory(llm=self.llm)
             
-            # Initialize decomposer if available
+            # Initialize decomposer if available (for entity extraction)
             self.decomposer = get_decomposer() if DECOMPOSER_AVAILABLE else None
             
-            # Cache for semantic search results
-            self._search_cache = {}
+            # Initialize VendorResolver if available
+            self.vendor_resolver = get_vendor_resolver() if VENDOR_RESOLVER_AVAILABLE and FEATURES.get('central_vendor_resolver', False) else None
             
-            logger.info("Enhanced RAG Processor initialized successfully")
+            # Initialize search cache if available
+            if CACHE_AVAILABLE and FEATURES.get('granular_caching', False):
+                self.search_cache = QueryCache(
+                    max_size=CACHE_TTL_BY_TYPE.get('semantic_search', 300),
+                    ttl_seconds=CACHE_TTL_BY_TYPE.get('semantic_search', 1800)
+                )
+            else:
+                self.search_cache = None
+            
+            logger.info("Enhanced RAG Processor initialized with template support")
             
         except Exception as e:
             logger.error(f"Failed to initialize RAG Processor: {e}")
@@ -89,47 +272,50 @@ class EnhancedRAGProcessor:
 
     def process_query(self, question: str, mode: str = "semantic") -> Dict[str, Any]:
         """
-        Process query with enhanced semantic understanding
+        Process query with enhanced semantic understanding and grounded responses
         
         Args:
             question: User's query
             mode: Processing mode - "semantic", "hybrid", or "analytical"
         """
         try:
-            # Extract entities if decomposer available
+            # Extract entities using decomposer (uses unified analysis if enabled)
             entities = None
             intent = None
             if self.decomposer:
                 query_analysis = decompose_query(question)
                 entities = query_analysis.get('entities', {})
                 intent = query_analysis.get('intent', {})
+                
+                # Resolve vendor names using VendorResolver
+                if self.vendor_resolver and entities.get('vendors'):
+                    resolved_vendors = []
+                    for vendor in entities['vendors']:
+                        resolved = self.vendor_resolver.resolve(vendor)
+                        if resolved:
+                            resolved_vendors.extend(resolved[:2])  # Top 2 matches
+                    entities['vendors'] = list(set(resolved_vendors))
+                    logger.info(f"Resolved vendors for semantic search: {entities['vendors']}")
             
-            # Perform semantic search
-            search_results = self._enhanced_semantic_search(question, entities)
+            # Perform tiered semantic search
+            search_results = self._tiered_semantic_search(question, entities)
             
             if not search_results or len(search_results) == 0:
-                return {
-                    "summary": "No relevant data found in the knowledge base.",
-                    "answer": "I couldn't find specific information about that in the procurement data. Please try rephrasing your question or asking about specific vendors or categories.",
-                    "confidence": 10,
-                    "source": "RAG"
-                }
+                return self._create_no_data_response(question, entities)
             
-            # Build context from search results
-            context = self._build_enhanced_context(search_results, entities, intent)
+            # Check data quality
+            quality_assessment = self._assess_data_quality(search_results)
+            if quality_assessment['quality'] == 'low':
+                logger.warning(f"Low quality data for query: {question[:50]}...")
             
-            # Generate response based on query type
-            if intent and intent.get('primary_intent') == 'recommendation':
-                response = self._generate_recommendation_response(question, context, search_results)
-            elif intent and intent.get('primary_intent') == 'comparison':
-                response = self._generate_comparison_response(question, context, search_results, entities)
-            elif mode == "analytical":
-                response = self._generate_analytical_response(question, context, search_results)
-            else:
-                response = self._generate_semantic_response(question, context, search_results)
+            # Build enhanced context
+            context = self._build_enhanced_context(search_results, entities, intent, quality_assessment)
+            
+            # Generate response using appropriate grounded prompt with template support
+            response = self._generate_grounded_response(question, context, intent, search_results)
             
             # Calculate confidence score
-            confidence = self._calculate_confidence(search_results, response)
+            confidence = self._calculate_confidence(search_results, quality_assessment)
             
             return {
                 "summary": response,
@@ -137,8 +323,11 @@ class EnhancedRAGProcessor:
                 "records_analyzed": len(search_results),
                 "confidence": confidence,
                 "source": "RAG",
-                "search_relevance": self._calculate_relevance_score(search_results),
-                "entities_identified": entities if entities else {}
+                "search_tier_used": quality_assessment.get('search_tier', 'unknown'),
+                "data_quality": quality_assessment['quality'],
+                "entities_identified": entities if entities else {},
+                "grounded_prompts_used": FEATURES.get('grounded_prompts', False),
+                "template_parsing_used": FEATURES.get('template_parsing', False)
             }
             
         except Exception as e:
@@ -151,101 +340,233 @@ class EnhancedRAGProcessor:
                 "source": "RAG"
             }
 
-    def _enhanced_semantic_search(self, question: str, entities: Optional[Dict] = None) -> List[Dict]:
+    def _tiered_semantic_search(self, question: str, entities: Optional[Dict] = None) -> List[Dict]:
         """
-        Perform enhanced semantic search with entity awareness
+        Perform tiered semantic search with progressive expansion.
+        Implements SEMANTIC_SEARCH_TIERS from constants.
         """
-        # Check cache
-        cache_key = hashlib.md5(question.encode()).hexdigest()
-        if cache_key in self._search_cache:
-            logger.info("Using cached search results")
-            return self._search_cache[cache_key]
+        # Check cache first
+        cache_key = hashlib.md5(f"{question}{entities}".encode()).hexdigest()
+        if self.search_cache:
+            cached = self.search_cache.get(f"{CACHE_KEY_PREFIXES['semantic']}{cache_key}")
+            if cached:
+                logger.info("Semantic search cache hit")
+                return cached
         
-        try:
-            # Build enhanced query
-            enhanced_query = question
+        results = []
+        search_tier_used = None
+        
+        # Try each tier progressively
+        for tier_name, tier_config in SEMANTIC_SEARCH_TIERS.items():
+            logger.info(f"Trying semantic search {tier_name}: {tier_config['description']}")
             
-            # Add entity context to improve search
+            # Modify query based on tier
+            search_query = self._modify_query_for_tier(question, entities, tier_config)
+            
+            # Perform search
+            try:
+                search_results = collection.query(
+                    query_texts=[search_query],
+                    n_results=tier_config['n_results']
+                )
+                
+                if search_results and search_results['metadatas'] and search_results['metadatas'][0]:
+                    # Filter by relevance threshold
+                    filtered_results = self._filter_by_relevance(
+                        search_results,
+                        tier_config['min_relevance']
+                    )
+                    
+                    if filtered_results and len(filtered_results) >= 5:  # Need at least 5 results
+                        results = filtered_results
+                        search_tier_used = tier_name
+                        logger.info(f"Found {len(results)} results in {tier_name}")
+                        break
+                    else:
+                        logger.info(f"Insufficient results in {tier_name}, trying next tier")
+                
+            except Exception as e:
+                logger.error(f"Search failed for {tier_name}: {e}")
+                continue
+        
+        # Process and rank results
+        if results:
+            results = self._process_and_rank_results(results, entities)
+            
+            # Cache the results
+            if self.search_cache:
+                self.search_cache.set(f"{CACHE_KEY_PREFIXES['semantic']}{cache_key}", results)
+            
+            # Store which tier was used
+            if results and len(results) > 0:
+                results[0]['search_tier'] = search_tier_used
+        
+        return results
+
+    def _modify_query_for_tier(self, question: str, entities: Optional[Dict], tier_config: Dict) -> str:
+        """
+        Modify query based on tier requirements.
+        Uses STRATEGIC_TERM_MAPPINGS from constants.
+        """
+        if not tier_config.get('query_modification'):
+            return question  # Tier 1: exact query
+        
+        modified_query = question
+        
+        if tier_config['query_modification'] == 'add_synonyms':
+            # Tier 2: Add synonyms and related terms
+            expanded_terms = []
+            
+            # Check strategic term mappings
+            question_lower = question.lower()
+            for strategic_term, synonyms in STRATEGIC_TERM_MAPPINGS.items():
+                if strategic_term in question_lower:
+                    expanded_terms.extend(synonyms)
+            
+            # Add entity context
             if entities:
                 if entities.get('vendors'):
-                    enhanced_query += f" vendors: {' '.join(entities['vendors'][:3])}"
-                if entities.get('commodities'):
-                    enhanced_query += f" categories: {' '.join(entities['commodities'][:3])}"
+                    expanded_terms.extend([f"vendor:{v}" for v in entities['vendors'][:3]])
                 if entities.get('metrics'):
-                    enhanced_query += f" metrics: {' '.join(entities['metrics'][:3])}"
+                    expanded_terms.extend([f"metric:{m}" for m in entities['metrics'][:3]])
+                if entities.get('commodities'):
+                    expanded_terms.extend([f"category:{c}" for c in entities['commodities'][:3]])
             
-            # Perform vector search
-            results = collection.query(
-                query_texts=[enhanced_query],
-                n_results=50  # Get more results for better context
-            )
-            
-            if not results['metadatas'][0]:
-                # Try simplified query if enhanced query returns nothing
-                results = collection.query(
-                    query_texts=[question],
-                    n_results=30
-                )
-            
-            # Process and rank results
-            processed_results = self._process_search_results(results, entities)
-            
-            # Cache results
-            self._search_cache[cache_key] = processed_results
-            
-            return processed_results
-            
-        except Exception as e:
-            logger.error(f"Semantic search failed: {e}")
-            return []
-
-    def _process_search_results(self, results: Dict, entities: Optional[Dict] = None) -> List[Dict]:
-        """
-        Process and rank search results based on relevance
-        """
-        if not results.get('metadatas') or not results['metadatas'][0]:
-            return []
+            if expanded_terms:
+                modified_query = f"{question} {' '.join(expanded_terms)}"
         
+        elif tier_config['query_modification'] == 'category_search':
+            # Tier 3: Broad category search
+            categories = []
+            
+            # Extract broad categories from question
+            if 'vendor' in question.lower() or 'supplier' in question.lower():
+                categories.append('vendor management procurement suppliers')
+            if 'cost' in question.lower() or 'spend' in question.lower():
+                categories.append('cost spending budget financial')
+            if 'optimization' in question.lower() or 'improve' in question.lower():
+                categories.append('optimization improvement efficiency savings')
+            
+            if categories:
+                modified_query = f"{question} {' '.join(categories)}"
+            else:
+                # Fallback to very broad search
+                modified_query = f"{question} procurement spending vendors"
+        
+        logger.debug(f"Modified query for tier: {modified_query[:100]}...")
+        return modified_query
+
+    def _filter_by_relevance(self, search_results: Dict, min_relevance: float) -> List[Dict]:
+        """Filter search results by relevance score"""
+        filtered = []
+        
+        if not search_results.get('metadatas') or not search_results['metadatas'][0]:
+            return filtered
+        
+        metadatas = search_results['metadatas'][0]
+        distances = search_results.get('distances', [[]])[0] if 'distances' in search_results else []
+        
+        for i, metadata in enumerate(metadatas):
+            # Calculate relevance from distance (lower distance = higher relevance)
+            if i < len(distances):
+                distance = distances[i]
+                relevance = 1 / (1 + distance)  # Convert distance to similarity
+            else:
+                relevance = 0.5  # Default if no distance available
+            
+            if relevance >= min_relevance:
+                metadata['relevance_score'] = relevance
+                filtered.append(metadata)
+        
+        return filtered
+
+    def _process_and_rank_results(self, results: List[Dict], entities: Optional[Dict]) -> List[Dict]:
+        """
+        Process and rank results with entity boost and vendor resolution.
+        """
         processed = []
         
-        for i, metadata in enumerate(results['metadatas'][0]):
-            # Calculate relevance score
-            relevance = 1.0
-            
+        for result in results:
             # Boost relevance for entity matches
-            if entities and metadata:
-                if entities.get('vendors'):
-                    vendor_field = metadata.get(VENDOR_COL, '').upper()
+            relevance_boost = 1.0
+            
+            if entities and result:
+                # Check vendor matches (with resolved names)
+                if entities.get('vendors') and VENDOR_COL in result:
+                    vendor_field = result.get(VENDOR_COL, '').upper()
                     for vendor in entities['vendors']:
                         if vendor.upper() in vendor_field:
-                            relevance *= 1.5
+                            relevance_boost *= 1.5
+                            logger.debug(f"Boosted relevance for vendor match: {vendor}")
                 
-                if entities.get('commodities'):
-                    commodity_field = metadata.get(COMMODITY_COL, '').upper()
+                # Check commodity matches
+                if entities.get('commodities') and COMMODITY_COL in result:
+                    commodity_field = result.get(COMMODITY_COL, '').upper()
                     for commodity in entities['commodities']:
                         if commodity.upper() in commodity_field:
-                            relevance *= 1.3
+                            relevance_boost *= 1.3
             
-            # Add distance score if available
-            if results.get('distances') and results['distances'][0]:
-                distance = results['distances'][0][i]
-                # Convert distance to similarity (lower distance = higher similarity)
-                similarity = 1 / (1 + distance)
-                relevance *= similarity
-            
-            metadata['relevance_score'] = relevance
-            processed.append(metadata)
+            # Apply boost
+            original_relevance = result.get('relevance_score', 0.5)
+            result['relevance_score'] = min(1.0, original_relevance * relevance_boost)
+            processed.append(result)
         
         # Sort by relevance
         processed.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         
-        return processed[:30]  # Return top 30 most relevant
+        # Return top results
+        return processed[:50]
+
+    def _assess_data_quality(self, search_results: List[Dict]) -> Dict[str, Any]:
+        """
+        Assess the quality of search results.
+        Uses QUALITY_THRESHOLDS from constants.
+        """
+        if not search_results:
+            return {'quality': 'none', 'details': 'No results found'}
+        
+        # Convert to DataFrame for analysis
+        df = pd.DataFrame(search_results)
+        
+        # Calculate metrics
+        num_results = len(df)
+        avg_relevance = np.mean([r.get('relevance_score', 0) for r in search_results[:10]])
+        
+        # Check for nulls in key columns
+        null_percentage = 0
+        key_columns = [VENDOR_COL, COST_COL, DESC_COL]
+        for col in key_columns:
+            if col in df.columns:
+                null_percentage += df[col].isna().sum() / len(df)
+        null_percentage = null_percentage / len(key_columns) if key_columns else 0
+        
+        # Determine quality level
+        quality = 'low'
+        for level, thresholds in QUALITY_THRESHOLDS.items():
+            if (num_results >= thresholds['min_data_points'] and
+                avg_relevance >= thresholds['min_relevance'] and
+                null_percentage <= thresholds['max_null_percentage']):
+                quality = level.replace('_quality', '')
+                break
+        
+        # Get search tier if available
+        search_tier = search_results[0].get('search_tier', 'unknown') if search_results else 'none'
+        
+        return {
+            'quality': quality,
+            'num_results': num_results,
+            'avg_relevance': float(avg_relevance),
+            'null_percentage': float(null_percentage),
+            'search_tier': search_tier
+        }
 
     def _build_enhanced_context(self, search_results: List[Dict], 
-                               entities: Optional[Dict] = None,
-                               intent: Optional[Dict] = None) -> str:
+                               entities: Optional[Dict],
+                               intent: Optional[Dict],
+                               quality_assessment: Dict) -> str:
         """
-        Build comprehensive context from search results
+        Build comprehensive context from search results with data quality indicators.
+        Enhanced version that provides better structure for grounded prompts.
         """
         if not search_results:
             return "No relevant data found."
@@ -255,17 +576,20 @@ class EnhancedRAGProcessor:
         
         context_parts = []
         
-        # Overall statistics
-        context_parts.append(f"Analyzing {len(df)} relevant procurement records.")
+        # Data quality indicator
+        context_parts.append(f"Data Quality: {quality_assessment['quality'].upper()}")
+        context_parts.append(f"Records Found: {len(df)}")
+        context_parts.append(f"Average Relevance: {quality_assessment['avg_relevance']:.2%}\n")
         
-        # Vendor analysis
+        # Vendor analysis with resolved names
         if VENDOR_COL in df.columns:
             vendor_counts = df[VENDOR_COL].value_counts()
             top_vendors = vendor_counts.head(5)
             
             if not top_vendors.empty:
-                vendor_list = [f"{v} ({c} records)" for v, c in top_vendors.items()]
-                context_parts.append(f"Top vendors in results: {', '.join(vendor_list)}")
+                context_parts.append("**Top Vendors in Results:**")
+                for vendor, count in top_vendors.items():
+                    context_parts.append(f"  - {vendor}: {count} records")
         
         # Cost analysis
         if COST_COL in df.columns:
@@ -277,388 +601,229 @@ class EnhancedRAGProcessor:
             
             valid_costs = df['COST_NUMERIC'].dropna()
             if not valid_costs.empty:
-                total_cost = valid_costs.sum()
-                avg_cost = valid_costs.mean()
-                median_cost = valid_costs.median()
-                
-                context_parts.append(f"Financial metrics from search results:")
-                context_parts.append(f"  - Total value: ${total_cost:,.2f}")
-                context_parts.append(f"  - Average: ${avg_cost:,.2f}")
-                context_parts.append(f"  - Median: ${median_cost:,.2f}")
+                context_parts.append("\n**Financial Metrics:**")
+                context_parts.append(f"  - Total Value: ${valid_costs.sum():,.2f}")
+                context_parts.append(f"  - Average: ${valid_costs.mean():,.2f}")
+                context_parts.append(f"  - Median: ${valid_costs.median():,.2f}")
+                context_parts.append(f"  - Range: ${valid_costs.min():,.2f} - ${valid_costs.max():,.2f}")
         
         # Category analysis
         if COMMODITY_COL in df.columns:
             categories = df[COMMODITY_COL].value_counts().head(5)
             if not categories.empty:
-                cat_list = [f"{cat} ({count})" for cat, count in categories.items()]
-                context_parts.append(f"Main categories: {', '.join(cat_list)}")
+                context_parts.append("\n**Main Categories:**")
+                for cat, count in categories.items():
+                    context_parts.append(f"  - {cat}: {count} records")
         
-        # Add intent-specific context
-        if intent:
-            intent_type = intent.get('primary_intent', '')
-            if intent_type == 'comparison' and entities and entities.get('vendors'):
-                # Focus on comparison data
-                vendor_data = {}
-                for vendor in entities['vendors']:
-                    vendor_df = df[df[VENDOR_COL].str.upper().str.contains(vendor.upper(), na=False)]
-                    if not vendor_df.empty:
-                        vendor_data[vendor] = {
-                            'count': len(vendor_df),
-                            'total': vendor_df['COST_NUMERIC'].sum() if 'COST_NUMERIC' in vendor_df else 0,
-                            'avg': vendor_df['COST_NUMERIC'].mean() if 'COST_NUMERIC' in vendor_df else 0
-                        }
-                
-                if vendor_data:
-                    context_parts.append("\nVendor-specific data from search:")
-                    for vendor, data in vendor_data.items():
-                        context_parts.append(f"  {vendor}: {data['count']} records, "
-                                           f"${data['total']:,.2f} total, "
-                                           f"${data['avg']:,.2f} average")
-        
-        # Sample records for detailed context
-        context_parts.append("\nSample records (top 5 by relevance):")
+        # Sample records for context
+        context_parts.append("\n**Sample Records (Top 5 by Relevance):**")
         for i, row in enumerate(df.head(5).itertuples(), 1):
-            record_desc = f"{i}. "
+            record_parts = []
+            
             if hasattr(row, VENDOR_COL.replace(' ', '_')):
-                record_desc += f"Vendor: {getattr(row, VENDOR_COL.replace(' ', '_'))}, "
+                vendor = getattr(row, VENDOR_COL.replace(' ', '_'))
+                record_parts.append(f"Vendor: {vendor}")
+            
             if hasattr(row, COST_COL.replace(' ', '_')):
-                record_desc += f"Cost: {getattr(row, COST_COL.replace(' ', '_'))}, "
+                cost = getattr(row, COST_COL.replace(' ', '_'))
+                record_parts.append(f"Cost: {cost}")
+            
             if hasattr(row, DESC_COL.replace(' ', '_')):
                 desc = str(getattr(row, DESC_COL.replace(' ', '_')))[:100]
-                record_desc += f"Description: {desc}..."
-            context_parts.append(record_desc)
+                record_parts.append(f"Description: {desc}...")
+            
+            context_parts.append(f"{i}. {' | '.join(record_parts)}")
+        
+        # Add entity context if available
+        if entities:
+            context_parts.append("\n**Query Context:**")
+            if entities.get('vendors'):
+                context_parts.append(f"  - Vendors of Interest: {', '.join(entities['vendors'])}")
+            if entities.get('metrics'):
+                context_parts.append(f"  - Metrics Requested: {', '.join(entities['metrics'])}")
         
         return '\n'.join(context_parts)
 
-    def _generate_semantic_response(self, question: str, context: str, 
+    def _generate_grounded_response(self, question: str, context: str, 
+                                   intent: Optional[Dict], 
                                    search_results: List[Dict]) -> str:
         """
-        Generate standard semantic response with improved prompting
+        Generate response using appropriate grounded prompt from constants.
+        UPDATED: Now uses dynamic prompt functions with template support.
         """
-        prompt = PromptTemplate(
-            template="""You are an expert procurement analyst. Answer the following question based on the search results from the procurement database.
-
-Question: {question}
-
-Context from search results:
-{context}
-
-Guidelines:
-1. Provide a clear, concise, and informative answer
-2. Use specific numbers and examples from the data when available
-3. If the data doesn't fully answer the question, acknowledge limitations
-4. Format numbers with proper currency formatting (e.g., $1,234.56)
-5. Be professional but conversational
-6. If multiple interpretations exist, address the most likely one
-7. Highlight key insights or patterns you notice
-
-Answer:""",
-            input_variables=["question", "context"]
-        )
-        
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(question=question, context=context)
-        
-        return response.strip()
-
-    def _generate_comparison_response(self, question: str, context: str,
-                                     search_results: List[Dict],
-                                     entities: Optional[Dict] = None) -> str:
-        """
-        Generate comparison-focused response
-        """
-        # Extract vendor-specific data
-        vendor_analysis = self._analyze_vendors_from_results(search_results, entities)
-        
-        prompt = PromptTemplate(
-            template="""You are an expert procurement analyst specializing in vendor comparisons. 
-Analyze and compare the vendors based on the search results.
-
-Question: {question}
-
-Context from search results:
-{context}
-
-Vendor-specific analysis:
-{vendor_analysis}
-
-Guidelines for comparison:
-1. Clearly compare the vendors on multiple dimensions (cost, volume, categories)
-2. Highlight key differences and similarities
-3. Provide specific metrics for each vendor
-4. Identify which vendor performs better in different aspects
-5. Offer insights about vendor relationships
-6. Use tables or bullet points for clarity
-7. Conclude with a summary of findings
-
-Comparison Analysis:""",
-            input_variables=["question", "context", "vendor_analysis"]
-        )
-        
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(
-            question=question,
-            context=context,
-            vendor_analysis=json.dumps(vendor_analysis, indent=2)
-        )
-        
-        return response.strip()
-
-    def _generate_recommendation_response(self, question: str, context: str,
-                                        search_results: List[Dict]) -> str:
-        """
-        Generate recommendation-focused response
-        """
-        # Analyze patterns for recommendations
-        patterns = self._identify_patterns(search_results)
-        
-        prompt = PromptTemplate(
-            template="""You are a strategic procurement advisor. Based on the search results, 
-provide actionable recommendations.
-
-Question: {question}
-
-Context from search results:
-{context}
-
-Identified patterns:
-{patterns}
-
-Guidelines for recommendations:
-1. Provide clear, actionable recommendations
-2. Base recommendations on data patterns and insights
-3. Consider cost optimization opportunities
-4. Identify risks and opportunities
-5. Suggest specific actions with expected outcomes
-6. Prioritize recommendations by potential impact
-7. Include metrics to track success
-8. Consider both short-term and long-term strategies
-
-Strategic Recommendations:""",
-            input_variables=["question", "context", "patterns"]
-        )
-        
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(
-            question=question,
-            context=context,
-            patterns=json.dumps(patterns, indent=2)
-        )
-        
-        return response.strip()
-
-    def _generate_analytical_response(self, question: str, context: str,
-                                     search_results: List[Dict]) -> str:
-        """
-        Generate deep analytical response
-        """
-        # Perform statistical analysis
-        stats = self._calculate_statistics(search_results)
-        
-        prompt = PromptTemplate(
-            template="""You are a data analyst specializing in procurement analytics. 
-Provide a comprehensive analysis based on the search results.
-
-Question: {question}
-
-Context from search results:
-{context}
-
-Statistical analysis:
-{statistics}
-
-Guidelines for analysis:
-1. Provide thorough statistical analysis
-2. Identify trends and patterns
-3. Explain correlations and relationships
-4. Use visualizations descriptions (e.g., "if plotted, this would show...")
-5. Discuss outliers and anomalies
-6. Provide confidence levels for findings
-7. Suggest areas for further investigation
-8. Include methodology notes where relevant
-
-Analytical Report:""",
-            input_variables=["question", "context", "statistics"]
-        )
-        
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(
-            question=question,
-            context=context,
-            statistics=json.dumps(stats, indent=2)
-        )
-        
-        return response.strip()
-
-    def _analyze_vendors_from_results(self, search_results: List[Dict],
-                                     entities: Optional[Dict] = None) -> Dict[str, Any]:
-        """
-        Analyze vendor-specific data from search results
-        """
-        if not search_results:
-            return {}
-        
-        df = pd.DataFrame(search_results)
-        vendor_analysis = {}
-        
-        if VENDOR_COL not in df.columns:
-            return vendor_analysis
-        
-        # Get list of vendors to analyze
-        vendors_to_analyze = []
-        if entities and entities.get('vendors'):
-            vendors_to_analyze = entities['vendors']
-        else:
-            # Get top vendors from results
-            vendor_counts = df[VENDOR_COL].value_counts()
-            vendors_to_analyze = vendor_counts.head(5).index.tolist()
-        
-        # Analyze each vendor
-        for vendor in vendors_to_analyze:
-            vendor_df = df[df[VENDOR_COL].str.upper().str.contains(vendor.upper(), na=False)]
+        # Select the appropriate grounded prompt based on intent
+        if FEATURES.get('grounded_prompts', False) and intent:
+            intent_type = intent.get('primary_intent', 'other')
             
-            if vendor_df.empty:
-                continue
-            
-            analysis = {
-                'record_count': len(vendor_df),
-                'categories': vendor_df[COMMODITY_COL].value_counts().head(3).to_dict() 
-                             if COMMODITY_COL in vendor_df else {},
-            }
-            
-            # Cost analysis
-            if COST_COL in vendor_df.columns:
-                vendor_df['COST_NUMERIC'] = pd.to_numeric(
-                    vendor_df[COST_COL].astype(str).str.replace(',', '').str.replace('$', ''),
-                    errors='coerce'
+            if intent_type == 'comparison':
+                # Use dynamic comparison prompt
+                vendor_data = self._extract_vendor_data(search_results)
+                prompt = get_grounded_comparison_prompt().format(
+                    vendor_data=json.dumps(vendor_data, indent=2),
+                    question=question
                 )
                 
-                valid_costs = vendor_df['COST_NUMERIC'].dropna()
-                if not valid_costs.empty:
-                    analysis['total_spending'] = float(valid_costs.sum())
-                    analysis['average_cost'] = float(valid_costs.mean())
-                    analysis['median_cost'] = float(valid_costs.median())
-                    analysis['min_cost'] = float(valid_costs.min())
-                    analysis['max_cost'] = float(valid_costs.max())
-            
-            vendor_analysis[vendor] = analysis
-        
-        return vendor_analysis
+            elif intent_type == 'recommendation':
+                # Use dynamic recommendation prompt
+                prompt = get_grounded_recommendation_prompt().format(
+                    context=context,
+                    focus=question,
+                    question=question
+                )
+                
+            elif intent_type == 'statistical':
+                # Use dynamic statistical prompt
+                statistics = self._calculate_statistics(search_results)
+                prompt = get_grounded_statistical_prompt().format(
+                    statistics=json.dumps(statistics, indent=2),
+                    question=question
+                )
+                
+            else:
+                # Use general dynamic synthesis prompt
+                prompt = get_grounded_synthesis_prompt().format(
+                    context=context,
+                    question=question
+                )
+        else:
+            # Fallback to basic grounded prompt if features disabled
+            prompt = f"""Based ONLY on the following data, answer the question.
+If the data doesn't support an answer, say "I don't have sufficient data."
 
-    def _identify_patterns(self, search_results: List[Dict]) -> Dict[str, Any]:
-        """
-        Identify patterns in search results for recommendations
-        """
-        if not search_results:
-            return {}
+Data Context:
+{context}
+
+Question: {question}
+
+Answer:"""
         
-        df = pd.DataFrame(search_results)
-        patterns = {}
-        
-        # Spending patterns
-        if COST_COL in df.columns:
-            df['COST_NUMERIC'] = pd.to_numeric(
-                df[COST_COL].astype(str).str.replace(',', '').str.replace('$', ''),
-                errors='coerce'
-            )
+        # Generate response with LLM
+        try:
+            chain = LLMChain(llm=self.llm, prompt=PromptTemplate(template=prompt, input_variables=[]))
+            response = chain.run()
             
-            valid_costs = df['COST_NUMERIC'].dropna()
-            if not valid_costs.empty:
-                patterns['spending'] = {
-                    'high_value_threshold': float(valid_costs.quantile(0.9)),
-                    'low_value_threshold': float(valid_costs.quantile(0.1)),
-                    'concentration': float(valid_costs.std() / valid_costs.mean()) if valid_costs.mean() > 0 else 0
-                }
-        
-        # Vendor concentration
-        if VENDOR_COL in df.columns:
-            vendor_counts = df[VENDOR_COL].value_counts()
-            total_records = len(df)
+            # Extract content from template if template parsing is enabled
+            if FEATURES.get('template_parsing', False):
+                response = extract_template_content(response)
             
-            patterns['vendor_concentration'] = {
-                'top_vendor_share': float(vendor_counts.iloc[0] / total_records) if not vendor_counts.empty else 0,
-                'top_5_share': float(vendor_counts.head(5).sum() / total_records) if len(vendor_counts) >= 5 else 0,
-                'unique_vendors': len(vendor_counts)
-            }
+            return response.strip()
+        except Exception as e:
+            logger.error(f"LLM response generation failed: {e}")
+            # Fallback to basic summary
+            return self._generate_fallback_response(context, search_results)
+
+    def _extract_vendor_data(self, search_results: List[Dict]) -> List[Dict]:
+        """Extract vendor-specific data for comparison prompt"""
+        vendor_data = {}
         
-        # Category patterns
-        if COMMODITY_COL in df.columns:
-            category_counts = df[COMMODITY_COL].value_counts()
-            patterns['categories'] = {
-                'dominant_category': category_counts.index[0] if not category_counts.empty else None,
-                'category_diversity': len(category_counts),
-                'top_categories': category_counts.head(3).to_dict()
-            }
+        for result in search_results:
+            vendor = result.get(VENDOR_COL)
+            if vendor:
+                if vendor not in vendor_data:
+                    vendor_data[vendor] = {
+                        'vendor': vendor,
+                        'records': 0,
+                        'total_cost': 0,
+                        'costs': []
+                    }
+                
+                vendor_data[vendor]['records'] += 1
+                
+                # Try to extract cost
+                cost_str = result.get(COST_COL, '')
+                try:
+                    cost = float(str(cost_str).replace(',', '').replace('$', ''))
+                    vendor_data[vendor]['costs'].append(cost)
+                    vendor_data[vendor]['total_cost'] += cost
+                except:
+                    pass
         
-        return patterns
+        # Calculate averages
+        for vendor in vendor_data.values():
+            if vendor['costs']:
+                vendor['avg_cost'] = sum(vendor['costs']) / len(vendor['costs'])
+                vendor['min_cost'] = min(vendor['costs'])
+                vendor['max_cost'] = max(vendor['costs'])
+                del vendor['costs']  # Remove raw data
+        
+        return list(vendor_data.values())
 
     def _calculate_statistics(self, search_results: List[Dict]) -> Dict[str, Any]:
-        """
-        Calculate comprehensive statistics from search results
-        """
-        if not search_results:
-            return {}
-        
+        """Calculate statistics from search results"""
         df = pd.DataFrame(search_results)
-        stats = {
-            'total_records': len(df),
-            'data_completeness': {}
-        }
+        stats = {'record_count': len(df)}
         
-        # Check data completeness
-        for col in df.columns:
-            stats['data_completeness'][col] = float(df[col].notna().sum() / len(df))
-        
-        # Cost statistics
         if COST_COL in df.columns:
-            df['COST_NUMERIC'] = pd.to_numeric(
-                df[COST_COL].astype(str).str.replace(',', '').str.replace('$', ''),
-                errors='coerce'
-            )
+            # Extract numeric costs
+            costs = []
+            for cost_str in df[COST_COL]:
+                try:
+                    cost = float(str(cost_str).replace(',', '').replace('$', ''))
+                    costs.append(cost)
+                except:
+                    pass
             
-            valid_costs = df['COST_NUMERIC'].dropna()
-            if not valid_costs.empty:
+            if costs:
                 stats['cost_statistics'] = {
-                    'count': len(valid_costs),
-                    'total': float(valid_costs.sum()),
-                    'mean': float(valid_costs.mean()),
-                    'median': float(valid_costs.median()),
-                    'std': float(valid_costs.std()),
-                    'min': float(valid_costs.min()),
-                    'max': float(valid_costs.max()),
-                    'q25': float(valid_costs.quantile(0.25)),
-                    'q75': float(valid_costs.quantile(0.75)),
-                    'skewness': float(valid_costs.skew()),
-                    'kurtosis': float(valid_costs.kurtosis())
+                    'count': len(costs),
+                    'total': sum(costs),
+                    'mean': np.mean(costs),
+                    'median': np.median(costs),
+                    'std': np.std(costs),
+                    'min': min(costs),
+                    'max': max(costs)
                 }
-        
-        # Vendor statistics
-        if VENDOR_COL in df.columns:
-            vendor_counts = df[VENDOR_COL].value_counts()
-            stats['vendor_statistics'] = {
-                'unique_vendors': len(vendor_counts),
-                'records_per_vendor_mean': float(vendor_counts.mean()),
-                'records_per_vendor_median': float(vendor_counts.median()),
-                'most_frequent_vendor': vendor_counts.index[0] if not vendor_counts.empty else None,
-                'most_frequent_count': int(vendor_counts.iloc[0]) if not vendor_counts.empty else 0
-            }
-        
-        # Category statistics
-        if COMMODITY_COL in df.columns:
-            category_counts = df[COMMODITY_COL].value_counts()
-            stats['category_statistics'] = {
-                'unique_categories': len(category_counts),
-                'most_common_category': category_counts.index[0] if not category_counts.empty else None,
-                'category_distribution': category_counts.head(10).to_dict()
-            }
         
         return stats
 
-    def _calculate_confidence(self, search_results: List[Dict], response: str) -> int:
+    def _generate_fallback_response(self, context: str, search_results: List[Dict]) -> str:
+        """Generate basic response without LLM"""
+        if not search_results:
+            return "No relevant data found to answer your question."
+        
+        response_parts = [f"Found {len(search_results)} relevant records.\n"]
+        
+        # Add basic summary from context
+        if "Total Value:" in context:
+            # Extract financial metrics
+            for line in context.split('\n'):
+                if 'Total Value:' in line or 'Average:' in line:
+                    response_parts.append(line.strip())
+        
+        return '\n'.join(response_parts)
+
+    def _create_no_data_response(self, question: str, entities: Optional[Dict]) -> Dict[str, Any]:
         """
-        Calculate confidence score for the response
+        Create response when no data is found.
+        Uses INSUFFICIENT_DATA_MESSAGES from constants.
         """
+        # Try to provide helpful context
+        if entities and entities.get('vendors'):
+            # Check if vendor might be misspelled
+            vendor = entities['vendors'][0]
+            message = INSUFFICIENT_DATA_MESSAGES['vendor_not_found'].format(
+                vendor=vendor,
+                suggestions="Try checking the spelling or using a different vendor name."
+            )
+        else:
+            message = INSUFFICIENT_DATA_MESSAGES['no_data']
+        
+        return {
+            "summary": message,
+            "answer": message,
+            "records_analyzed": 0,
+            "confidence": 10,
+            "source": "RAG",
+            "data_quality": "none"
+        }
+
+    def _calculate_confidence(self, search_results: List[Dict], quality_assessment: Dict) -> int:
+        """Calculate confidence score based on results and quality"""
         confidence = 50  # Base confidence
+        
+        # Adjust based on data quality
+        quality_map = {'high': 30, 'medium': 20, 'low': 10, 'none': 0}
+        confidence += quality_map.get(quality_assessment['quality'], 0)
         
         # Adjust based on number of results
         if len(search_results) > 20:
@@ -668,32 +833,17 @@ Analytical Report:""",
         elif len(search_results) < 5:
             confidence -= 20
         
-        # Adjust based on relevance scores
-        if search_results:
-            avg_relevance = np.mean([r.get('relevance_score', 0.5) for r in search_results[:10]])
-            confidence += int(avg_relevance * 20)
+        # Adjust based on average relevance
+        avg_relevance = quality_assessment.get('avg_relevance', 0.5)
+        confidence += int(avg_relevance * 20)
         
-        # Adjust based on response quality
-        if response:
-            if '$' in response and any(char.isdigit() for char in response):
-                confidence += 10  # Contains specific numbers
-            if len(response) > 500:
-                confidence += 10  # Comprehensive response
-            if 'unable' in response.lower() or 'cannot' in response.lower():
-                confidence -= 15  # Indicates limitations
+        # Adjust based on search tier used
+        tier_penalty = {'tier_1_exact': 0, 'tier_2_expanded': -5, 'tier_3_broad': -10}
+        search_tier = quality_assessment.get('search_tier', 'unknown')
+        confidence += tier_penalty.get(search_tier, -5)
         
         # Cap between 0 and 100
         return max(0, min(100, confidence))
-
-    def _calculate_relevance_score(self, search_results: List[Dict]) -> float:
-        """
-        Calculate overall relevance score for search results
-        """
-        if not search_results:
-            return 0.0
-        
-        relevance_scores = [r.get('relevance_score', 0.5) for r in search_results[:10]]
-        return float(np.mean(relevance_scores)) if relevance_scores else 0.0
 
 # ============================================
 # SINGLETON INSTANCE
@@ -715,13 +865,7 @@ def get_rag_processor() -> EnhancedRAGProcessor:
 def answer_question_intelligent(question: str, mode: str = "semantic") -> Dict[str, Any]:
     """
     Main entry point for RAG processing (backward compatible)
-    
-    Args:
-        question: User's query
-        mode: Processing mode
-        
-    Returns:
-        Dict containing answer and metadata
+    Now uses grounded prompts with template support
     """
     try:
         processor = get_rag_processor()
@@ -739,31 +883,66 @@ def answer_question_intelligent(question: str, mode: str = "semantic") -> Dict[s
 def analyze_vendor_semantic(vendor_name: str) -> Dict[str, Any]:
     """
     Perform semantic analysis for a specific vendor
+    Now uses VendorResolver for better matching
     """
+    # Resolve vendor name first if VendorResolver available
+    if VENDOR_RESOLVER_AVAILABLE and FEATURES.get('central_vendor_resolver', False):
+        resolver = get_vendor_resolver()
+        if resolver:
+            resolved = resolver.get_canonical_name(vendor_name)
+            if resolved:
+                vendor_name = resolved
+                logger.info(f"Resolved vendor name to: {vendor_name}")
+    
     question = f"Provide a comprehensive analysis of {vendor_name} including spending patterns, categories, and relationships"
     return answer_question_intelligent(question, mode="analytical")
 
 def get_recommendations(context: str = "cost optimization") -> Dict[str, Any]:
     """
     Get strategic recommendations based on semantic analysis
+    Now uses dynamic GROUNDED_RECOMMENDATION_PROMPT with template support
     """
     question = f"What are the top recommendations for {context} based on procurement patterns?"
-    return answer_question_intelligent(question, mode="semantic")
+    result = answer_question_intelligent(question, mode="semantic")
+    
+    # Mark as using grounded prompts and template parsing
+    result['recommendation_type'] = context
+    result['grounded_recommendation'] = FEATURES.get('grounded_prompts', False)
+    result['template_parsing'] = FEATURES.get('template_parsing', False)
+    
+    return result
 
 def compare_vendors_semantic(vendors: List[str]) -> Dict[str, Any]:
     """
     Perform semantic comparison of multiple vendors
+    Now uses VendorResolver and dynamic GROUNDED_COMPARISON_PROMPT with template support
     """
+    # Resolve vendor names if VendorResolver available
+    if VENDOR_RESOLVER_AVAILABLE and FEATURES.get('central_vendor_resolver', False):
+        resolver = get_vendor_resolver()
+        if resolver:
+            resolved_vendors = []
+            for vendor in vendors:
+                resolved = resolver.get_canonical_name(vendor)
+                resolved_vendors.append(resolved if resolved else vendor)
+            vendors = resolved_vendors
+            logger.info(f"Resolved vendor names: {vendors}")
+    
     vendor_str = " and ".join(vendors)
     question = f"Compare {vendor_str} across all dimensions including spending, categories, and performance"
-    return answer_question_intelligent(question, mode="semantic")
+    
+    result = answer_question_intelligent(question, mode="semantic")
+    result['comparison_vendors'] = vendors
+    result['template_parsing'] = FEATURES.get('template_parsing', False)
+    
+    return result
 
 # ============================================
 # TESTING
 # ============================================
 
 if __name__ == "__main__":
-    # Test the enhanced RAG processor
+    # Test the enhanced RAG processor with template support
     test_queries = [
         "What are the spending patterns for Dell?",
         "Compare Microsoft and IBM procurement strategies",
@@ -772,12 +951,18 @@ if __name__ == "__main__":
         "What's the relationship between order size and vendor performance?",
     ]
     
-    print("Testing Enhanced RAG Processor")
+    print("Testing Enhanced RAG Processor with Template Support")
     print("=" * 60)
+    
+    # Enable all features for testing
+    FEATURES['grounded_prompts'] = True
+    FEATURES['central_vendor_resolver'] = True
+    FEATURES['tiered_search'] = True
+    FEATURES['template_parsing'] = True
     
     processor = get_rag_processor()
     
-    for query in test_queries:
+    for query in test_queries[:2]:  # Test first 2 queries
         print(f"\nQuery: {query}")
         print("-" * 40)
         
@@ -785,7 +970,17 @@ if __name__ == "__main__":
         
         print(f"Confidence: {result.get('confidence')}%")
         print(f"Records Analyzed: {result.get('records_analyzed')}")
-        print(f"Search Relevance: {result.get('search_relevance', 0):.2f}")
+        print(f"Data Quality: {result.get('data_quality', 'unknown')}")
+        print(f"Search Tier Used: {result.get('search_tier_used', 'unknown')}")
+        print(f"Grounded Prompts: {result.get('grounded_prompts_used', False)}")
+        print(f"Template Parsing: {result.get('template_parsing_used', False)}")
+        
+        if result.get('entities_identified'):
+            entities = result['entities_identified']
+            if entities.get('vendors'):
+                print(f"Vendors Identified: {entities['vendors']}")
+        
         print(f"\nAnswer Preview:")
-        print(result.get('answer', 'No answer')[:500] + "...")
+        answer = result.get('answer', 'No answer')
+        print(answer[:500] + "..." if len(answer) > 500 else answer)
         print("-" * 40)

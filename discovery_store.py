@@ -1,3 +1,5 @@
+# discovery_store.py
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -13,11 +15,19 @@ class DiscoveryStore:
         username = os.getenv('DISCOVERY_USERNAME', 'admin')
         password = os.getenv('DISCOVERY_PASSWORD')
         
+        # FIX: Define headers for Elasticsearch 8 compatibility
+        # This resolves the error: "Accept version must be either version 8 or 7, but found 9"
+        headers = {
+            "Accept": "application/vnd.elasticsearch+json; compatible-with=8",
+            "Content-Type": "application/vnd.elasticsearch+json; compatible-with=8"
+        }
+
         self.es = Elasticsearch(
             es_url,
             basic_auth=(username, password),
             verify_certs=False,
-            ssl_show_warn=False
+            ssl_show_warn=False,
+            headers=headers # Apply compatibility headers
         )
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         self.index = 'procurement'

@@ -1,1182 +1,465 @@
 """
-hybrid_rag_logic.py - Intelligent Query Processor with LLM-Powered Understanding
-Enhanced with query decomposition, natural language generation, and semantic understanding
+hybrid_rag_logic.py - Main query processing logic with optimizations
+Integrates smart routing, unified analysis, grounded prompts, and template parsing
+UPDATED: Added template-based response handling
 """
 
 import os
-import sys
-import sqlite3
-import pandas as pd
-import numpy as np
 import re
 import json
 import time
 import hashlib
-import platform
-import asyncio
-from typing import Dict, Any, Optional, List, Tuple
-from functools import lru_cache, wraps
-from datetime import datetime, timedelta
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any, Optional, List, Tuple
+import pandas as pd
+import sqlite3
 
-# Import shared modules
+from dotenv import load_dotenv
+load_dotenv()
+
+# Import from constants
 from constants import (
-    TOKEN_LIMITS, SQL_INJECTION_KEYWORDS, STOP_WORDS,
-    STATISTICAL_KEYWORDS, CACHE_MAX_SIZE, CACHE_TTL_SECONDS,
-    QUERY_TIMEOUT_SECONDS, MAX_RETRY_ATTEMPTS, BACKOFF_FACTOR,
-    WATSONX_URL, WATSONX_PROJECT_ID
+    DB_PATH, VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL,
+    DIRECT_SQL_PATTERNS, ROUTING_CONFIDENCE_THRESHOLD,
+    FEATURES, PERFORMANCE_TARGETS, SLOW_QUERY_THRESHOLD,
+    CACHE_TTL_BY_TYPE, CACHE_KEY_PREFIXES,
+    INSUFFICIENT_DATA_MESSAGES, MIN_DATA_REQUIREMENTS
 )
+
+# Import database utilities
 from database_utils import db_manager, safe_execute_query
+
+# Import hybrid RAG architecture with template extraction
+from hybrid_rag_architecture import (
+    HybridProcurementRAG, 
+    get_vendor_resolver
+)
+from template_utils import extract_template_response
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment setup
-from dotenv import load_dotenv
-load_dotenv()
-
-# Import the hybrid architecture
-from hybrid_rag_architecture import HybridProcurementRAG, QueryType
-
-# Import base RAG logic if available
-try:
-    from rag_logic import answer_question_intelligent as original_rag_answer
-    RAG_AVAILABLE = True
-except ImportError:
-    RAG_AVAILABLE = False
-    logger.warning("Base RAG logic not available - using SQL-only mode")
-
-# ============================================
-# IMPORT NEW LLM QUERY DECOMPOSER
-# ============================================
+# Try to import LLM components
 try:
     from query_decomposer import (
-        get_decomposer, decompose_query, generate_response, resolve_reference,
-        QueryIntent, EntityExtraction, QueryDecomposition
+        get_decomposer, decompose_query, generate_response, 
+        resolve_reference, get_performance_stats as get_llm_stats
     )
     LLM_DECOMPOSER_AVAILABLE = True
-    logger.info("LLM Query Decomposer loaded successfully")
 except ImportError as e:
     LLM_DECOMPOSER_AVAILABLE = False
     logger.warning(f"LLM Query Decomposer not available: {e}")
 
+# Try to import enhanced RAG
+try:
+    from rag_logic import (
+        get_rag_processor, answer_question_intelligent as rag_answer_question
+    )
+    ENHANCED_RAG_AVAILABLE = True
+except ImportError as e:
+    ENHANCED_RAG_AVAILABLE = False
+    logger.warning(f"Enhanced RAG Processor not available: {e}")
+
 # Import cache if available
 try:
-    from simple_cache import QueryCache
-    query_cache = QueryCache(max_size=CACHE_MAX_SIZE, ttl_seconds=CACHE_TTL_SECONDS)
+    from simple_cache import get_cache_manager, cache_get, cache_set
     CACHE_AVAILABLE = True
 except ImportError:
     CACHE_AVAILABLE = False
-    query_cache = None
+    cache_get = lambda k, t: None
+    cache_set = lambda k, v, t, ttl: None
     logger.warning("Cache not available")
 
-# Initialize hybrid system
-_hybrid_system = None
-
-# Thread pool for parallel processing
-executor = ThreadPoolExecutor(max_workers=3)
-
-def get_hybrid_system() -> HybridProcurementRAG:
-    """Singleton pattern for hybrid system"""
-    global _hybrid_system
-    if _hybrid_system is None:
-        _hybrid_system = HybridProcurementRAG(enable_fuzzy_matching=True, fuzzy_threshold=0.8)
-    return _hybrid_system
-
-# ======================================================================
-# ENHANCED QUERY PROCESSING WITH LLM
-# ======================================================================
-
-def answer_question_intelligent(question: str, mode: str = "auto") -> Dict[str, Any]:
-    """
-    Main entry point with LLM-powered understanding and comprehensive fallbacks
-    
-    Args:
-        question: User's query
-        mode: Processing mode - "auto", "sql", "rag", or "hybrid"
-    
-    Returns:
-        Dict containing answer with natural language response and metadata
-    """
-    start_time = time.time()
-    
-    # Input sanitization
-    question = sanitize_input(question)
-    
-    # Check cache first
-    cache_key = None
-    if CACHE_AVAILABLE and mode == "auto":
-        cache_key = generate_cache_key(question)
-        cached_result = query_cache.get(cache_key)
-        if cached_result:
-            logger.info(f"Cache hit for query: {question[:50]}...")
-            cached_result['cache_hit'] = True
-            return cached_result
-    
-    try:
-        # ============================================
-        # NEW: LLM-POWERED QUERY UNDERSTANDING
-        # ============================================
-        query_analysis = None
-        if LLM_DECOMPOSER_AVAILABLE and mode in ["auto", "hybrid"]:
-            logger.info("Analyzing query with LLM...")
-            query_analysis = decompose_query(question)
-            
-            # Log the analysis
-            logger.info(f"Query intent: {query_analysis['intent']['primary_intent']} "
-                       f"(confidence: {query_analysis['intent']['confidence']})")
-            logger.info(f"Extracted vendors: {query_analysis['entities']['vendors']}")
-            logger.info(f"Query complexity: {'Complex' if query_analysis['is_complex'] else 'Simple'}")
-        
-        # Route based on mode and LLM analysis
-        if mode == "sql":
-            result = process_sql_query(question, query_analysis)
-        elif mode == "rag":
-            result = process_rag_query(question, query_analysis)
-        elif mode == "hybrid":
-            result = process_hybrid_query(question, query_analysis)
-        else:  # auto mode
-            result = process_auto_query_enhanced(question, query_analysis)
-        
-        # ============================================
-        # NEW: NATURAL LANGUAGE RESPONSE GENERATION
-        # ============================================
-        if LLM_DECOMPOSER_AVAILABLE and result.get('answer'):
-            # Generate natural language response
-            original_answer = result.get('answer', '')
-            enhanced_response = generate_response(question, result)
-            
-            # Keep both versions
-            result['raw_answer'] = original_answer
-            result['answer'] = enhanced_response
-            result['llm_enhanced'] = True
-        
-        # Add metadata
-        result['processing_time'] = time.time() - start_time
-        result['mode'] = mode
-        
-        # Cache successful results
-        if CACHE_AVAILABLE and cache_key and result.get('confidence', 0) > 70:
-            query_cache.set(cache_key, result)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Query processing failed: {e}")
-        return create_error_response(str(e), question)
-
-def process_auto_query_enhanced(question: str, query_analysis: Optional[Dict] = None) -> Dict[str, Any]:
-    """
-    Enhanced automatic query processing with LLM-powered routing
-    """
-    hybrid_system = get_hybrid_system()
-    
-    # ============================================
-    # NEW: LLM-GUIDED PROCESSING
-    # ============================================
-    if query_analysis and LLM_DECOMPOSER_AVAILABLE:
-        intent = query_analysis['intent']
-        entities = query_analysis['entities']
-        decomposition = query_analysis['decomposition']
-        
-        # Handle complex queries with decomposition
-        if query_analysis['is_complex']:
-            return process_complex_decomposed_query(question, decomposition, hybrid_system)
-        
-        # Route based on LLM-identified intent
-        if intent['primary_intent'] == 'recommendation':
-            # Needs both SQL data and semantic reasoning
-            return process_recommendation_query(question, entities, hybrid_system)
-        
-        # For SQL-appropriate queries, enhance with extracted entities
-        if intent['requires_sql'] and not intent['requires_semantic']:
-            # Enhance question with resolved entities
-            enhanced_question = enhance_question_with_llm_entities(question, entities)
-            sql_result = try_sql_processing(enhanced_question, hybrid_system, entities)
-            
-            if sql_result and sql_result.get('confidence', 0) > 70:
-                return sql_result
-        
-        # For semantic queries
-        if intent['requires_semantic']:
-            return process_semantic_enhanced(question, entities)
-    
-    # ============================================
-    # FALLBACK TO ORIGINAL LOGIC
-    # ============================================
-    return process_auto_query_original(question, hybrid_system)
-
-def process_complex_decomposed_query(question: str, decomposition: Dict, 
-                                    hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """
-    Process complex query using LLM decomposition
-    """
-    sub_queries = decomposition['sub_queries']
-    execution_order = decomposition['execution_order']
-    combination_strategy = decomposition['combination_strategy']
-    
-    results = {}
-    combined_answer = []
-    total_records = 0
-    
-    # Execute sub-queries in order
-    for idx in execution_order:
-        sub_query = sub_queries[idx]
-        sub_question = sub_query['query']
-        query_type = sub_query['type']
-        dependencies = sub_query['dependencies']
-        
-        # Prepare context from dependencies
-        context = {}
-        for dep_idx in dependencies:
-            if dep_idx in results:
-                context[f'query_{dep_idx}'] = results[dep_idx]
-        
-        # Execute sub-query based on type
-        if query_type == 'sql':
-            sub_result = hybrid_system.process_query(sub_question)
-        elif query_type == 'semantic':
-            sub_result = process_rag_query(sub_question) if RAG_AVAILABLE else {}
-        else:  # calculation
-            sub_result = perform_calculation(sub_question, context)
-        
-        results[idx] = sub_result
-        
-        if sub_result.get('answer'):
-            combined_answer.append(sub_result['answer'])
-        
-        if sub_result.get('records_analyzed'):
-            total_records += sub_result['records_analyzed']
-    
-    # Combine results based on strategy
-    if combination_strategy == 'merge':
-        final_answer = '\n\n'.join(combined_answer)
-    elif combination_strategy == 'sequential':
-        final_answer = format_sequential_results(combined_answer)
-    elif combination_strategy == 'conditional':
-        final_answer = apply_conditional_logic(results, decomposition)
-    else:
-        final_answer = '\n\n'.join(combined_answer)
-    
-    return {
-        'source': 'Complex Query Processing',
-        'query_type': 'decomposed',
-        'answer': final_answer,
-        'sub_queries_executed': len(sub_queries),
-        'records_analyzed': total_records,
-        'confidence': 85,
-        'decomposition': decomposition
-    }
-
-def process_recommendation_query(question: str, entities: Dict, 
-                                hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """
-    Process recommendation queries using both SQL and semantic reasoning
-    """
-    # Get performance data for relevant vendors
-    vendor_data = {}
-    
-    if entities.get('vendors'):
-        for vendor in entities['vendors']:
-            stats = hybrid_system._get_vendor_statistics(vendor)
-            if stats:
-                vendor_data[vendor] = stats
-    else:
-        # Get all vendor statistics for general recommendations
-        query = f"""
-        SELECT 
-            {hybrid_system.VENDOR_COL} as vendor,
-            COUNT(*) as order_count,
-            SUM(CAST({hybrid_system.COST_COL} AS FLOAT)) as total_spending,
-            AVG(CAST({hybrid_system.COST_COL} AS FLOAT)) as avg_order,
-            MIN(CAST({hybrid_system.COST_COL} AS FLOAT)) as min_order,
-            MAX(CAST({hybrid_system.COST_COL} AS FLOAT)) as max_order
-        FROM procurement
-        WHERE {hybrid_system.COST_COL} IS NOT NULL
-        GROUP BY {hybrid_system.VENDOR_COL}
-        ORDER BY total_spending DESC
-        LIMIT 20
-        """
-        
-        df = pd.read_sql_query(query, hybrid_system.sql_conn)
-        for _, row in df.iterrows():
-            vendor_data[row['vendor']] = row.to_dict()
-    
-    # Apply business logic for recommendations
-    recommendations = generate_business_recommendations(vendor_data, question, entities)
-    
-    return {
-        'source': 'Recommendation Engine',
-        'query_type': 'recommendation',
-        'answer': recommendations,
-        'vendors_analyzed': len(vendor_data),
-        'confidence': 80,
-        'evidence_report': 'Based on performance metrics and business logic analysis'
-    }
-
-def process_semantic_enhanced(question: str, entities: Dict) -> Dict[str, Any]:
-    """
-    Enhanced semantic search with entity awareness
-    """
-    if not RAG_AVAILABLE:
-        return {
-            'source': 'Semantic Search',
-            'error': 'RAG module not available',
-            'confidence': 0
-        }
-    
-    # Enhance the question with extracted entities for better context
-    enhanced_context = []
-    
-    if entities.get('vendors'):
-        enhanced_context.append(f"Vendors of interest: {', '.join(entities['vendors'])}")
-    
-    if entities.get('metrics'):
-        enhanced_context.append(f"Metrics to analyze: {', '.join(entities['metrics'])}")
-    
-    if entities.get('time_periods'):
-        enhanced_context.append(f"Time period: {', '.join(entities['time_periods'])}")
-    
-    enhanced_question = question
-    if enhanced_context:
-        enhanced_question = f"{question}\n\nContext: {' | '.join(enhanced_context)}"
-    
-    # Call RAG with enhanced question
-    rag_result = original_rag_answer(enhanced_question)
-    rag_result['entities_used'] = entities
-    
-    return rag_result
-
-# ======================================================================
-# ENHANCED ENTITY RESOLUTION WITH LLM
-# ======================================================================
-
-def enhance_question_with_llm_entities(question: str, entities: Dict) -> str:
-    """
-    Enhance question with LLM-extracted and resolved entities
-    """
-    enhanced = question
-    
-    # Handle ambiguous references
-    if entities.get('ambiguous_references'):
-        for ambiguous, resolved in entities['ambiguous_references'].items():
-            logger.info(f"Resolving '{ambiguous}' to '{resolved}'")
-            # Replace in question for SQL processing
-            enhanced = enhanced.replace(ambiguous, resolved)
-    
-    # Add vendor clarifications if needed
-    if entities.get('vendors') and not any(v.lower() in question.lower() for v in entities['vendors']):
-        vendors_str = ' and '.join(entities['vendors'][:3])
-        enhanced = f"{enhanced} (vendors: {vendors_str})"
-    
-    return enhanced
-
-def extract_vendors_with_llm(question: str, hybrid_system: HybridProcurementRAG) -> List[str]:
-    """
-    Extract vendors using LLM for better understanding
-    """
-    if not LLM_DECOMPOSER_AVAILABLE:
-        return extract_vendors_with_fallbacks_original(question, hybrid_system)
-    
-    # Use LLM to resolve ambiguous references
-    decomposer = get_decomposer()
-    entities = decomposer.extract_entities(question)
-    
-    vendors = entities.vendors
-    
-    # Also check for ambiguous references
-    if entities.ambiguous_references:
-        for ref, possible_vendor in entities.ambiguous_references.items():
-            # Resolve each reference
-            resolved = resolve_reference(ref, context="procurement vendors")
-            vendors.extend(resolved)
-    
-    # Validate against database
-    validated_vendors = []
-    for vendor in vendors:
-        db_vendors = hybrid_system._find_vendor_in_db(vendor)
-        validated_vendors.extend(db_vendors)
-    
-    return list(set(validated_vendors))[:10]
-
-# ======================================================================
-# ENHANCED SQL PROCESSING WITH LLM UNDERSTANDING
-# ======================================================================
-
-def try_sql_processing(question: str, hybrid_system: HybridProcurementRAG, 
-                      entities: Optional[Dict] = None) -> Dict[str, Any]:
-    """
-    Enhanced SQL processing with LLM entity understanding
-    """
-    try:
-        # If we have LLM-extracted entities, use them
-        if entities and entities.get('vendors'):
-            # Modify the hybrid system's vendor extraction to use our entities
-            original_extract = hybrid_system._extract_vendor_names
-            hybrid_system._extract_vendor_names = lambda q: entities['vendors']
-        
-        # Let hybrid system handle the query
-        result = hybrid_system.process_query(question)
-        
-        # Restore original method if modified
-        if entities and entities.get('vendors'):
-            hybrid_system._extract_vendor_names = original_extract
-        
-        # If SQL succeeded, enhance the result
-        if result.get('source') == 'SQL' and result.get('answer'):
-            # Add entity information to result
-            if entities:
-                result['extracted_entities'] = entities
-            return result
-        
-        # Statistical Query Enhancement with LLM understanding
-        if entities and 'median' in entities.get('metrics', []):
-            return calculate_statistics_enhanced(question, entities, hybrid_system)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"SQL processing failed: {e}")
-        return {"error": str(e), "source": "SQL", "confidence": 0}
-
-def calculate_statistics_enhanced(question: str, entities: Dict, 
-                                 hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """
-    Enhanced statistical calculation with entity awareness
-    """
-    try:
-        # Build query with entity filters
-        base_query = f"""
-        SELECT CAST({hybrid_system.COST_COL} AS FLOAT) as value
-        FROM procurement
-        WHERE {hybrid_system.COST_COL} IS NOT NULL
-        AND CAST({hybrid_system.COST_COL} AS FLOAT) > 0
-        """
-        
-        # Add vendor filters if specified
-        if entities.get('vendors'):
-            vendor_conditions = []
-            for vendor in entities['vendors']:
-                vendor_conditions.append(f"UPPER({hybrid_system.VENDOR_COL}) LIKE '%{vendor.upper()}%'")
-            if vendor_conditions:
-                base_query += f" AND ({' OR '.join(vendor_conditions)})"
-        
-        df = pd.read_sql_query(base_query, hybrid_system.sql_conn)
-        
-        if df.empty:
-            return {
-                "answer": "No data available for statistical calculation with specified filters",
-                "source": "SQL",
-                "confidence": 0
-            }
-        
-        values = df['value'].values
-        
-        # Calculate all requested metrics
-        results = {}
-        for metric in entities.get('metrics', []):
-            metric_lower = metric.lower()
-            
-            if 'median' in metric_lower:
-                results['median'] = np.median(values)
-            elif 'mean' in metric_lower or 'average' in metric_lower:
-                results['mean'] = np.mean(values)
-            elif 'variance' in metric_lower:
-                results['variance'] = np.var(values)
-            elif 'standard deviation' in metric_lower or 'stddev' in metric_lower:
-                results['std_dev'] = np.std(values)
-            elif 'min' in metric_lower:
-                results['min'] = np.min(values)
-            elif 'max' in metric_lower:
-                results['max'] = np.max(values)
-        
-        # Format comprehensive answer
-        answer_parts = [f"Statistical Analysis ({len(values):,} records):"]
-        for metric, value in results.items():
-            answer_parts.append(f"- {metric.replace('_', ' ').title()}: ${value:,.2f}")
-        
-        if entities.get('vendors'):
-            answer_parts.append(f"\nFiltered for vendors: {', '.join(entities['vendors'])}")
-        
-        return {
-            "answer": '\n'.join(answer_parts),
-            "source": "SQL",
-            "query_type": "statistical",
-            "records_analyzed": len(values),
-            "statistics": results,
-            "confidence": 95
-        }
-        
-    except Exception as e:
-        logger.error(f"Enhanced statistical calculation failed: {e}")
-        return {"error": str(e), "source": "SQL", "confidence": 0}
-
-# ======================================================================
-# BUSINESS LOGIC AND RECOMMENDATIONS
-# ======================================================================
-
-def generate_business_recommendations(vendor_data: Dict, question: str, entities: Dict) -> str:
-    """
-    Generate business recommendations based on data analysis
-    """
-    recommendations = []
-    
-    # Analyze vendor performance
-    if vendor_data:
-        # Calculate metrics
-        avg_spending = np.mean([v.get('total_spending', 0) for v in vendor_data.values()])
-        avg_orders = np.mean([v.get('order_count', 0) for v in vendor_data.values()])
-        
-        # Identify underperformers
-        underperformers = []
-        overperformers = []
-        
-        for vendor, stats in vendor_data.items():
-            spending = stats.get('total_spending', 0)
-            orders = stats.get('order_count', 0)
-            avg_order = stats.get('avg_order', 0)
-            
-            # Simple performance scoring
-            if orders < avg_orders * 0.5 and spending < avg_spending * 0.5:
-                underperformers.append({
-                    'vendor': vendor,
-                    'reason': f"Low activity: {orders} orders, ${spending:,.2f} total"
-                })
-            elif spending > avg_spending * 2 and orders > avg_orders * 1.5:
-                overperformers.append({
-                    'vendor': vendor,
-                    'reason': f"High volume: {orders} orders, ${spending:,.2f} total"
-                })
-        
-        # Generate recommendations
-        if 'drop' in question.lower() or 'remove' in question.lower():
-            recommendations.append("### Vendor Consolidation Recommendations\n")
-            if underperformers:
-                recommendations.append("**Consider reviewing relationships with:**")
-                for vendor in underperformers[:5]:
-                    recommendations.append(f"- **{vendor['vendor']}**: {vendor['reason']}")
-                recommendations.append("\n*Rationale*: These vendors show significantly below-average activity.")
-            else:
-                recommendations.append("All vendors show reasonable activity levels.")
-        
-        elif 'invest' in question.lower() or 'increase' in question.lower():
-            recommendations.append("### Strategic Partnership Recommendations\n")
-            if overperformers:
-                recommendations.append("**Consider strengthening relationships with:**")
-                for vendor in overperformers[:5]:
-                    recommendations.append(f"- **{vendor['vendor']}**: {vendor['reason']}")
-                recommendations.append("\n*Rationale*: These vendors demonstrate strong engagement.")
-        
-        else:
-            # General recommendations
-            recommendations.append("### Procurement Analysis Summary\n")
-            recommendations.append(f"- **Total Vendors Analyzed**: {len(vendor_data)}")
-            recommendations.append(f"- **Average Spending per Vendor**: ${avg_spending:,.2f}")
-            recommendations.append(f"- **Average Orders per Vendor**: {avg_orders:.0f}")
-            
-            if underperformers:
-                recommendations.append(f"\n**Optimization Opportunity**: {len(underperformers)} vendors "
-                                     "show low activity and could be candidates for consolidation.")
-            
-            if overperformers:
-                recommendations.append(f"\n**Key Partners**: {len(overperformers)} vendors "
-                                     "represent your primary procurement relationships.")
-    
-    if not recommendations:
-        recommendations.append("Unable to generate specific recommendations. "
-                             "Please provide more context or specific criteria.")
-    
-    return '\n'.join(recommendations)
-
-# ======================================================================
-# PARALLEL PROCESSING FOR COMPLEX QUERIES
-# ======================================================================
-
-def process_parallel_subqueries(sub_queries: List[Dict], hybrid_system: HybridProcurementRAG) -> Dict[int, Any]:
-    """
-    Process independent sub-queries in parallel
-    """
-    results = {}
-    
-    # Identify independent queries (no dependencies)
-    independent = [(i, sq) for i, sq in enumerate(sub_queries) if not sq.get('dependencies', [])]
-    
-    if independent:
-        futures = {}
-        for idx, sub_query in independent:
-            future = executor.submit(
-                hybrid_system.process_query,
-                sub_query['query']
-            )
-            futures[future] = idx
-        
-        # Collect results
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                results[idx] = future.result(timeout=10)
-            except Exception as e:
-                logger.error(f"Sub-query {idx} failed: {e}")
-                results[idx] = {"error": str(e)}
-    
-    return results
-
-# ======================================================================
+# ============================================
 # HELPER FUNCTIONS
-# ======================================================================
+# ============================================
 
-def perform_calculation(query: str, context: Dict) -> Dict[str, Any]:
-    """
-    Perform calculations on previous query results
-    """
-    try:
-        # Extract values from context
-        values = []
-        for key, result in context.items():
-            if isinstance(result, dict):
-                if 'total_spending' in result:
-                    values.append(result['total_spending'])
-                elif 'avg_order' in result:
-                    values.append(result['avg_order'])
-        
-        if not values:
-            return {"error": "No values to calculate", "confidence": 0}
-        
-        # Perform calculation based on query
-        query_lower = query.lower()
-        
-        if 'compare' in query_lower or 'better' in query_lower:
-            if len(values) >= 2:
-                diff = values[0] - values[1]
-                pct_diff = (diff / values[1]) * 100 if values[1] != 0 else 0
-                
-                answer = f"Comparison Result:\n"
-                answer += f"- First value: ${values[0]:,.2f}\n"
-                answer += f"- Second value: ${values[1]:,.2f}\n"
-                answer += f"- Difference: ${abs(diff):,.2f} ({abs(pct_diff):.1f}%)\n"
-                answer += f"- {'First' if diff > 0 else 'Second'} is higher"
-                
-                return {
-                    "answer": answer,
-                    "source": "Calculation",
-                    "confidence": 100
-                }
-        
-        return {
-            "answer": f"Calculated values: {values}",
-            "source": "Calculation",
-            "confidence": 80
-        }
-        
-    except Exception as e:
-        logger.error(f"Calculation failed: {e}")
-        return {"error": str(e), "confidence": 0}
-
-def format_sequential_results(results: List[str]) -> str:
-    """Format sequential results with step numbers"""
-    formatted = []
-    for i, result in enumerate(results, 1):
-        formatted.append(f"**Step {i}:**\n{result}")
-    return '\n\n'.join(formatted)
-
-def apply_conditional_logic(results: Dict, decomposition: Dict) -> str:
-    """Apply conditional logic to combine results"""
-    # This would need more complex implementation based on specific conditions
-    # For now, return all results
-    combined = []
-    for idx, result in results.items():
-        if result.get('answer'):
-            combined.append(result['answer'])
-    return '\n\n'.join(combined)
-
-# ======================================================================
-# ORIGINAL FALLBACK FUNCTIONS (Preserved)
-# ======================================================================
-
-def process_auto_query_original(question: str, hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """Original auto query processing as fallback"""
-    try:
-        # First attempt - SQL processing
-        sql_result = try_sql_processing_original(question, hybrid_system)
-        sql_confidence = calculate_confidence(sql_result, "sql")
-        
-        # If SQL has high confidence, return it
-        if sql_confidence > 80:
-            logger.info(f"SQL result with high confidence ({sql_confidence})")
-            return sql_result
-        
-        # Second attempt - RAG processing
-        if RAG_AVAILABLE:
-            rag_result = try_rag_processing(question)
-            rag_confidence = calculate_confidence(rag_result, "rag")
-            
-            # Merge if both have results
-            if sql_confidence > 50 and rag_confidence > 50:
-                logger.info("Merging SQL and RAG results")
-                return merge_results_enhanced(sql_result, rag_result, question)
-            
-            # Return best result
-            if rag_confidence > sql_confidence:
-                return rag_result
-        
-        # If we have any SQL result, return it
-        if sql_result and sql_result.get('answer'):
-            return sql_result
-        
-        # Final fallback - basic keyword search
-        return perform_basic_search(question, hybrid_system)
-        
-    except Exception as e:
-        logger.error(f"Auto query processing failed: {e}")
-        return create_error_response(str(e), question)
-
-def try_sql_processing_original(question: str, hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """Original SQL processing without LLM enhancement"""
-    try:
-        result = hybrid_system.process_query(question)
-        
-        if result.get('source') == 'SQL' and result.get('answer'):
-            return result
-        
-        # Try vendor resolution fallback
-        vendors = extract_vendors_with_fallbacks_original(question, hybrid_system)
-        if vendors:
-            modified_question = enhance_question_with_vendors(question, vendors)
-            result = hybrid_system.process_query(modified_question)
-            if result.get('answer'):
-                return result
-        
-        # Statistical query fallback
-        if is_statistical_query(question):
-            return calculate_statistics_manually_original(question, hybrid_system)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"SQL processing failed: {e}")
-        return {"error": str(e), "source": "SQL", "confidence": 0}
-
-def extract_vendors_with_fallbacks_original(question: str, hybrid_system: HybridProcurementRAG) -> List[str]:
-    """Original vendor extraction without LLM"""
-    vendors = []
-    
-    # Strategy 1: Direct extraction from hybrid system
-    vendors = hybrid_system._extract_vendor_names(question)
-    if vendors:
-        return vendors
-    
-    # Strategy 2: Fuzzy matching
-    words = question.upper().split()
-    for word in words:
-        if len(word) > 3:
-            fuzzy_matches = hybrid_system._find_fuzzy_vendor_matches(word)
-            vendors.extend(fuzzy_matches)
-    
-    if vendors:
-        return list(set(vendors))[:10]
-    
-    # Strategy 3: Pattern matching
-    patterns = [
-        r'\b([A-Z][A-Z]+)\b',  # All caps words
-        r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',  # Proper nouns
-    ]
-    
-    for pattern in patterns:
-        matches = re.findall(pattern, question)
-        for match in matches:
-            if len(match) > 2:
-                db_vendors = hybrid_system._find_vendor_in_db(match)
-                vendors.extend(db_vendors)
-    
-    return list(set(vendors))[:10]
-
-def calculate_statistics_manually_original(question: str, hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """Original statistical calculation without LLM enhancement"""
-    try:
-        query = f"""
-        SELECT CAST({hybrid_system.COST_COL} AS FLOAT) as value
-        FROM procurement
-        WHERE {hybrid_system.COST_COL} IS NOT NULL
-        AND CAST({hybrid_system.COST_COL} AS FLOAT) > 0
-        """
-        
-        df = pd.read_sql_query(query, hybrid_system.sql_conn)
-        
-        if df.empty:
-            return {
-                "answer": "No data available for statistical calculation",
-                "source": "SQL",
-                "confidence": 0
-            }
-        
-        values = df['value'].values
-        question_lower = question.lower()
-        
-        # Calculate requested statistic
-        result_text = ""
-        
-        if 'median' in question_lower:
-            result = np.median(values)
-            result_text = f"Median: ${result:,.2f}"
-        
-        if 'mean' in question_lower or 'average' in question_lower:
-            result = np.mean(values)
-            result_text += f"\nMean: ${result:,.2f}"
-        
-        if not result_text:
-            result_text = f"""Statistical Summary:
-- Count: {len(values):,}
-- Mean: ${np.mean(values):,.2f}
-- Median: ${np.median(values):,.2f}
-- Std Dev: ${np.std(values):,.2f}"""
-        
-        return {
-            "answer": result_text,
-            "source": "SQL",
-            "query_type": "statistical",
-            "records_analyzed": len(values),
-            "confidence": 95
-        }
-        
-    except Exception as e:
-        logger.error(f"Statistical calculation failed: {e}")
-        return {"error": str(e), "source": "SQL", "confidence": 0}
-
-# ======================================================================
-# ENHANCED RESULT MERGING WITH LLM
-# ======================================================================
-
-def merge_results_enhanced(sql_result: Dict[str, Any], rag_result: Dict[str, Any], 
-                          question: str) -> Dict[str, Any]:
-    """
-    Enhanced result merging with LLM-powered synthesis
-    """
-    sql_conf = sql_result.get('confidence', 0)
-    rag_conf = rag_result.get('confidence', 0)
-    
-    # If one is significantly better, use it
-    if sql_conf > rag_conf + 20:
-        return sql_result
-    if rag_conf > sql_conf + 20:
-        return rag_result
-    
-    # Merge the results
-    merged = {
-        "source": "Hybrid",
-        "query_type": "merged",
-        "confidence": max(sql_conf, rag_conf),
-        "sql_confidence": sql_conf,
-        "rag_confidence": rag_conf
-    }
-    
-    # If LLM is available, synthesize the results
-    if LLM_DECOMPOSER_AVAILABLE:
-        combined_data = {
-            'sql_result': sql_result.get('answer', ''),
-            'rag_result': rag_result.get('answer', ''),
-            'sql_records': sql_result.get('records_analyzed', 0),
-            'rag_records': rag_result.get('records_analyzed', 0)
-        }
-        
-        synthesized = generate_response(question, combined_data)
-        merged['answer'] = synthesized
-        merged['synthesis_method'] = 'llm'
-    else:
-        # Fallback to simple combination
-        if sql_conf > 70 and rag_conf > 70:
-            merged['answer'] = f"""**Structured Data Analysis:**
-{sql_result.get('answer', 'No SQL results')}
-
-**Document Analysis:**
-{rag_result.get('answer', 'No RAG results')}"""
-        elif sql_conf > 70:
-            merged['answer'] = sql_result.get('answer')
-            merged['additional_context'] = rag_result.get('answer')
-        else:
-            merged['answer'] = rag_result.get('answer')
-            merged['additional_context'] = sql_result.get('answer')
-    
-    # Merge metadata
-    merged['records_analyzed'] = (
-        sql_result.get('records_analyzed', 0) + 
-        rag_result.get('records_analyzed', 0)
-    )
-    
-    return merged
-
-# ======================================================================
-# REMAINING HELPER FUNCTIONS (Preserved from original)
-# ======================================================================
-
-def process_sql_query(question: str, query_analysis: Optional[Dict] = None) -> Dict[str, Any]:
-    """Force SQL processing"""
-    hybrid_system = get_hybrid_system()
-    
-    if query_analysis and LLM_DECOMPOSER_AVAILABLE:
-        entities = query_analysis.get('entities', {})
-        return try_sql_processing(question, hybrid_system, entities)
-    
-    return try_sql_processing_original(question, hybrid_system)
-
-def process_rag_query(question: str, query_analysis: Optional[Dict] = None) -> Dict[str, Any]:
-    """Force RAG processing"""
-    if query_analysis and LLM_DECOMPOSER_AVAILABLE:
-        entities = query_analysis.get('entities', {})
-        return process_semantic_enhanced(question, entities)
-    
-    return try_rag_processing(question)
-
-def process_hybrid_query(question: str, query_analysis: Optional[Dict] = None) -> Dict[str, Any]:
-    """Process with both SQL and RAG, then merge"""
-    hybrid_system = get_hybrid_system()
-    
-    sql_result = process_sql_query(question, query_analysis)
-    rag_result = process_rag_query(question, query_analysis) if RAG_AVAILABLE else None
-    
-    if rag_result and sql_result:
-        return merge_results_enhanced(sql_result, rag_result, question)
-    
-    return sql_result or rag_result or create_error_response("No results", question)
-
-def try_rag_processing(question: str) -> Dict[str, Any]:
-    """Attempt RAG processing with fallbacks"""
-    if not RAG_AVAILABLE:
-        return {"error": "RAG not available", "source": "RAG", "confidence": 0}
-    
-    try:
-        rag_result = original_rag_answer(question)
-        
-        if rag_result and not rag_result.get('confidence'):
-            rag_result['confidence'] = calculate_confidence(rag_result, "rag")
-        
-        return rag_result
-        
-    except Exception as e:
-        logger.error(f"RAG processing failed: {e}")
-        return {"error": str(e), "source": "RAG", "confidence": 0}
-
-def calculate_confidence(result: Dict[str, Any], source_type: str) -> float:
-    """Calculate confidence score for a result"""
-    confidence = 50.0
-    
-    if not result or 'error' in result:
-        return 0.0
-    
-    if source_type == "sql":
-        if result.get('source') == 'SQL':
-            confidence += 20
-        if result.get('records_analyzed', 0) > 0:
-            confidence += min(30, result['records_analyzed'] / 10)
-        if result.get('query_type') in ['comparison', 'aggregation', 'ranking']:
-            confidence += 20
-    
-    elif source_type == "rag":
-        if result.get('answer') and len(str(result.get('answer', ''))) > 100:
-            confidence += 20
-        generic_phrases = ['cannot be calculated', 'no data available', 
-                          'unable to determine', 'not enough information']
-        answer_lower = str(result.get('answer', '')).lower()
-        if any(phrase in answer_lower for phrase in generic_phrases):
-            confidence -= 30
-    
-    return min(100.0, max(0.0, confidence))
-
-def is_statistical_query(question: str) -> bool:
-    """Check if query requires statistical calculation"""
-    question_lower = question.lower()
-    return any(term in question_lower for term in STATISTICAL_KEYWORDS)
-
-def enhance_question_with_vendors(question: str, vendors: List[str]) -> str:
-    """Enhance question by explicitly including vendor names"""
-    vendor_str = " and ".join(vendors[:3])
-    
-    if not any(v.lower() in question.lower() for v in vendors):
-        if "compare" in question.lower():
-            return f"{question} (vendors: {vendor_str})"
-        else:
-            return f"{question} for {vendor_str}"
-    
-    return question
-
-def perform_basic_search(question: str, hybrid_system: HybridProcurementRAG) -> Dict[str, Any]:
-    """Basic keyword search as final fallback"""
-    try:
-        keywords = extract_keywords(question)
-        
-        if not keywords:
-            return create_error_response("No searchable keywords found", question)
-        
-        conditions = []
-        params = []
-        
-        for keyword in keywords[:5]:
-            conditions.append(f"""
-                (UPPER({hybrid_system.VENDOR_COL}) LIKE ? OR 
-                 UPPER({hybrid_system.DESC_COL}) LIKE ? OR
-                 UPPER({hybrid_system.COMMODITY_COL}) LIKE ?)
-            """)
-            pattern = f"%{keyword.upper()}%"
-            params.extend([pattern, pattern, pattern])
-        
-        query = f"""
-        SELECT 
-            {hybrid_system.VENDOR_COL} as vendor,
-            {hybrid_system.DESC_COL} as description,
-            {hybrid_system.COMMODITY_COL} as commodity,
-            {hybrid_system.COST_COL} as cost
-        FROM procurement
-        WHERE {' OR '.join(conditions)}
-        LIMIT 20
-        """
-        
-        df = pd.read_sql_query(query, hybrid_system.sql_conn, params=params)
-        
-        if df.empty:
-            return {
-                "answer": "No results found for your query. Please try different keywords.",
-                "source": "Basic Search",
-                "confidence": 10
-            }
-        
-        answer = f"Found {len(df)} results matching keywords: {', '.join(keywords)}\n\n"
-        
-        for i, row in enumerate(df.head(5).itertuples(), 1):
-            answer += f"{i}. Vendor: {row.vendor}\n"
-            answer += f"   Description: {row.description[:100]}...\n"
-            answer += f"   Cost: ${float(row.cost):,.2f}\n\n"
-        
-        if len(df) > 5:
-            answer += f"... and {len(df) - 5} more results"
-        
-        return {
-            "answer": answer,
-            "source": "Basic Search",
-            "query_type": "keyword_search",
-            "records_analyzed": len(df),
-            "confidence": 40
-        }
-        
-    except Exception as e:
-        logger.error(f"Basic search failed: {e}")
-        return create_error_response(str(e), question)
-
-def extract_keywords(question: str) -> List[str]:
-    """Extract meaningful keywords from question"""
-    words = question.lower().split()
-    keywords = []
-    
-    for word in words:
-        word = re.sub(r'[^\w]', '', word)
-        
-        if len(word) > 2 and word not in STOP_WORDS:
-            keywords.append(word)
-    
-    return keywords
-
-def sanitize_input(question: str) -> str:
+def sanitize_input(text: str) -> str:
     """Sanitize user input to prevent SQL injection"""
-    if not question:
+    if not text:
         return ""
     
-    sanitized = question
-    for keyword in SQL_INJECTION_KEYWORDS:
-        if f' {keyword} ' in sanitized.upper() or sanitized.upper().startswith(keyword):
-            sanitized = re.sub(f'\\b{keyword}\\b', '', sanitized, flags=re.IGNORECASE)
+    # Remove potentially dangerous SQL keywords
+    dangerous_patterns = [
+        r'\bDROP\b', r'\bDELETE\b', r'\bINSERT\b', r'\bUPDATE\b',
+        r'\bALTER\b', r'\bCREATE\b', r'\bEXEC\b', r'\bEXECUTE\b',
+        r'--', r'/\*', r'\*/', r'\bUNION\b', r'\bTRUNCATE\b'
+    ]
     
-    sanitized = ' '.join(sanitized.split())
-    
-    try:
-        sanitized = sanitized.encode('utf-8', errors='ignore').decode('utf-8')
-    except:
-        pass
+    sanitized = text
+    for pattern in dangerous_patterns:
+        sanitized = re.sub(pattern, '', sanitized, flags=re.IGNORECASE)
     
     return sanitized.strip()
 
-def generate_cache_key(question: str) -> str:
-    """Generate cache key for question"""
-    normalized = question.lower().strip()
-    normalized = ' '.join(normalized.split())
-    return hashlib.md5(normalized.encode()).hexdigest()
+def generate_cache_key(question: str, mode: str = "auto") -> str:
+    """Generate cache key for a query"""
+    combined = f"{mode}:{question}"
+    return hashlib.md5(combined.encode()).hexdigest()
 
-def create_error_response(error_msg: str, question: str) -> Dict[str, Any]:
-    """Create structured error response"""
-    error_context = {
-        "error": error_msg,
-        "source": "Error Handler",
-        "query_type": "error",
-        "confidence": 0,
-        "timestamp": datetime.now().isoformat(),
-        "original_question": question[:100]
+def extract_response_content(response: Any) -> str:
+    """
+    Extract content from response, handling template formats.
+    Simple extraction without fallback mechanisms.
+    """
+    if response is None:
+        return ""
+    
+    # If it's already a string, check for template format
+    if isinstance(response, str):
+        if FEATURES.get('template_parsing', False):
+            # Use template extraction
+            extracted = extract_template_response(response)
+            if extracted != response:
+                logger.debug("Extracted template response")
+            return extracted
+        return response
+    
+    # If it's a dict, extract the answer/content
+    if isinstance(response, dict):
+        for field in ['answer', 'summary', 'content', 'response']:
+            if field in response:
+                # Recursively extract
+                return extract_response_content(response[field])
+    
+    return str(response)
+
+# ============================================
+# SMART ROUTING
+# ============================================
+
+def check_smart_routing(question: str) -> Optional[Dict[str, Any]]:
+    """
+    Check if query can be answered directly with SQL without LLM.
+    Critical optimization for performance.
+    """
+    if not FEATURES.get('smart_routing', False):
+        return None
+    
+    question_lower = question.lower().strip()
+    
+    # Check each pattern
+    for pattern_name, pattern_config in DIRECT_SQL_PATTERNS.items():
+        pattern = pattern_config['pattern']
+        if re.search(pattern, question_lower):
+            logger.info(f"Smart routing matched: {pattern_name}")
+            
+            # Execute the SQL directly
+            sql_template = pattern_config['sql_template']
+            response_template = pattern_config['response_template']
+            
+            try:
+                # Execute query
+                df = safe_execute_query(sql_template)
+                
+                if not df.empty:
+                    # Get the value
+                    value = df.iloc[0, 0]
+                    
+                    # Format response
+                    if 'value' in response_template:
+                        answer = response_template.format(value=value)
+                    else:
+                        answer = response_template
+                    
+                    return {
+                        'answer': answer,
+                        'source': 'Direct SQL',
+                        'confidence': 100,
+                        'llm_bypassed': True,
+                        'pattern_matched': pattern_name,
+                        'records_analyzed': 1,
+                        'processing_time': 0.0,  # Will be updated by caller
+                        'template_parsing': False  # Direct SQL doesn't use templates
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Smart routing SQL failed: {e}")
+                # Don't return None - let it fall through to normal processing
+    
+    return None
+
+# ============================================
+# MAIN QUERY PROCESSING
+# ============================================
+
+def answer_question_intelligent(question: str, mode: str = "auto") -> Dict[str, Any]:
+    """
+    Main entry point for intelligent query processing with all optimizations.
+    Includes smart routing, unified analysis, vendor resolution, grounded prompts, and template parsing.
+    """
+    start_time = time.time()
+    
+    # Sanitize input
+    question = sanitize_input(question)
+    
+    if not question:
+        return {
+            "error": "No valid question provided",
+            "answer": "Please provide a question.",
+            "confidence": 0,
+            "source": "Input Validation"
+        }
+    
+    # Check cache first
+    if CACHE_AVAILABLE and FEATURES.get('granular_caching', False):
+        cache_key = f"{CACHE_KEY_PREFIXES['final']}{generate_cache_key(question, mode)}"
+        cached = cache_get(cache_key, 'final_result')
+        if cached:
+            logger.info("Cache hit for final result")
+            cached['cache_hit'] = True
+            cached['processing_time'] = time.time() - start_time
+            return cached
+    
+    # SMART ROUTING: Check if we can bypass LLM entirely
+    if mode in ["auto", "sql"]:
+        smart_result = check_smart_routing(question)
+        if smart_result:
+            smart_result['processing_time'] = time.time() - start_time
+            
+            # Cache the smart routing result
+            if CACHE_AVAILABLE and FEATURES.get('granular_caching', False):
+                cache_key = f"{CACHE_KEY_PREFIXES['final']}{generate_cache_key(question, mode)}"
+                cache_set(cache_key, smart_result, 'final_result')
+            
+            logger.info(f"Smart routing completed in {smart_result['processing_time']:.2f}s")
+            return smart_result
+    
+    # Initialize hybrid system
+    try:
+        hybrid_system = HybridProcurementRAG(
+            enable_fuzzy_matching=True,
+            fuzzy_threshold=0.8,
+            use_llm=LLM_DECOMPOSER_AVAILABLE
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize hybrid system: {e}")
+        return {
+            "error": str(e),
+            "answer": "System initialization failed.",
+            "confidence": 0,
+            "source": "System Error"
+        }
+    
+    # Determine processing mode
+    if mode == "auto":
+        # Use LLM to determine best approach if available
+        if LLM_DECOMPOSER_AVAILABLE:
+            query_analysis = decompose_query(question)
+            suggested_mode = query_analysis.get('suggested_approach', 'hybrid')
+            
+            # Add template parsing status
+            query_analysis['template_parsing'] = FEATURES.get('template_parsing', False)
+        else:
+            suggested_mode = "sql"
+            query_analysis = None
+    elif mode == "semantic" and ENHANCED_RAG_AVAILABLE:
+        suggested_mode = "semantic"
+        query_analysis = None
+    else:
+        suggested_mode = mode
+        query_analysis = None
+    
+    # Process based on mode
+    result = None
+    
+    if suggested_mode == "semantic" and ENHANCED_RAG_AVAILABLE:
+        # Use semantic RAG processing
+        logger.info("Using semantic RAG processing")
+        result = rag_answer_question(question)
+        
+    elif suggested_mode in ["sql", "hybrid"]:
+        # Use hybrid system (SQL + optional LLM enhancement)
+        logger.info(f"Using hybrid processing (mode: {suggested_mode})")
+        result = hybrid_system.process_query(question)
+        
+    else:
+        # Fallback to basic SQL
+        logger.info("Using basic SQL processing")
+        result = hybrid_system.process_query(question)
+    
+    # Ensure result has required fields
+    if not result:
+        result = {
+            "answer": "Unable to process query",
+            "confidence": 0,
+            "source": "Unknown"
+        }
+    
+    # Extract template content if present
+    if 'answer' in result:
+        original_answer = result['answer']
+        result['answer'] = extract_response_content(original_answer)
+        
+        # Add metadata if template was used
+        if FEATURES.get('template_parsing', False) and original_answer != result['answer']:
+            result['template_extracted'] = True
+    
+    # Add metadata
+    result['mode'] = suggested_mode
+    result['processing_time'] = time.time() - start_time
+    result['llm_bypassed'] = False  # Was not bypassed since we got here
+    result['template_parsing'] = FEATURES.get('template_parsing', False)
+    
+    if query_analysis:
+        result['query_analysis'] = query_analysis
+    
+    # Check if slow
+    if result['processing_time'] > SLOW_QUERY_THRESHOLD:
+        logger.warning(f"Slow query: {result['processing_time']:.2f}s for: {question[:50]}...")
+    
+    # Cache the result
+    if CACHE_AVAILABLE and FEATURES.get('granular_caching', False):
+        cache_key = f"{CACHE_KEY_PREFIXES['final']}{generate_cache_key(question, mode)}"
+        cache_set(cache_key, result, 'final_result', ttl=CACHE_TTL_BY_TYPE.get('final_result', 1800))
+    
+    return result
+
+# ============================================
+# STATISTICAL ANALYSIS
+# ============================================
+
+def analyze_query_statistics(question: str) -> Dict[str, Any]:
+    """
+    Analyze statistical aspects of a query.
+    Returns metrics about the query and potential data.
+    """
+    stats = {
+        'query_length': len(question),
+        'word_count': len(question.split()),
+        'has_vendors': False,
+        'has_metrics': False,
+        'estimated_complexity': 'simple'
     }
     
-    error_lower = error_msg.lower()
+    # Check for vendor mentions
+    if VENDOR_RESOLVER_AVAILABLE and FEATURES.get('central_vendor_resolver', False):
+        resolver = get_vendor_resolver()
+        if resolver:
+            # Check each word for vendor matches
+            for word in question.split():
+                if len(word) > 3:
+                    matches = resolver.resolve(word, max_results=1)
+                    if matches:
+                        stats['has_vendors'] = True
+                        break
     
-    if "timeout" in error_lower:
-        error_context["suggestion"] = "Query took too long. Try simplifying your question."
-    elif "vendor" in error_lower:
-        error_context["suggestion"] = "Vendor not found. Try using the full vendor name or check spelling."
-    elif "no data" in error_lower or "no results" in error_lower:
-        error_context["suggestion"] = "No matching data found. Try broader search terms."
-    elif "sql" in error_lower or "database" in error_lower:
-        error_context["suggestion"] = "Database error. Please try again or contact support."
-    else:
-        error_context["suggestion"] = "An error occurred. Please rephrase your question and try again."
+    # Check for metric keywords
+    metric_keywords = ['total', 'average', 'sum', 'count', 'median', 'mean']
+    if any(keyword in question.lower() for keyword in metric_keywords):
+        stats['has_metrics'] = True
     
-    error_context["answer"] = f"""
-I encountered an issue processing your query: {error_context['suggestion']}
+    # Estimate complexity
+    if stats['word_count'] > 15:
+        stats['estimated_complexity'] = 'complex'
+    elif stats['word_count'] > 8:
+        stats['estimated_complexity'] = 'medium'
+    
+    return stats
 
-If you continue to experience issues, you can try:
-1. Simplifying your question
-2. Using specific vendor names
-3. Asking for basic statistics first
-"""
-    
-    return error_context
+# ============================================
+# PERFORMANCE MONITORING
+# ============================================
 
-# ======================================================================
-# TESTING ENHANCED SYSTEM
-# ======================================================================
-
-def test_enhanced_system():
-    """Test the enhanced LLM-powered system"""
-    test_queries = [
-        "Compare Dell and IBM and tell me which one we should invest more in",
-        "What's the median order value for that big computer company?",
-        "Which vendors should we consider dropping based on poor performance?",
-        "Show spending trends and recommend cost optimization strategies",
-        "How much did we spend with Microsft last quarter?",  # Typo intentional
-        "'; DROP TABLE procurement; --",  # SQL injection test
-    ]
+def get_system_performance_stats() -> Dict[str, Any]:
+    """
+    Get comprehensive system performance statistics.
+    """
+    stats = {
+        'timestamp': time.time(),
+        'features_enabled': {
+            'smart_routing': FEATURES.get('smart_routing', False),
+            'unified_analysis': FEATURES.get('unified_analysis', False),
+            'vendor_resolver': FEATURES.get('central_vendor_resolver', False),
+            'grounded_prompts': FEATURES.get('grounded_prompts', False),
+            'granular_caching': FEATURES.get('granular_caching', False),
+            'template_parsing': FEATURES.get('template_parsing', False),
+        },
+        'components_available': {
+            'llm_decomposer': LLM_DECOMPOSER_AVAILABLE,
+            'enhanced_rag': ENHANCED_RAG_AVAILABLE,
+            'cache': CACHE_AVAILABLE,
+            'vendor_resolver': VENDOR_RESOLVER_AVAILABLE
+        }
+    }
     
-    print("Testing Enhanced LLM-Powered System:")
-    print("=" * 60)
+    # Add LLM stats if available
+    if LLM_DECOMPOSER_AVAILABLE:
+        llm_stats = get_llm_stats()
+        stats['llm_performance'] = llm_stats
     
-    for query in test_queries:
-        print(f"\n{'='*60}")
-        print(f"Query: {query}")
-        print(f"{'='*60}")
+    # Add cache stats if available
+    if CACHE_AVAILABLE:
         try:
-            result = answer_question_intelligent(query)
-            
-            print(f"Source: {result.get('source')}")
-            print(f"Query Type: {result.get('query_type')}")
-            print(f"Confidence: {result.get('confidence')}")
-            print(f"LLM Enhanced: {result.get('llm_enhanced', False)}")
-            
-            if result.get('extracted_entities'):
-                print(f"Entities: {result['extracted_entities'].get('vendors', [])}")
-            
-            if result.get('decomposition'):
-                print(f"Complex Query: {result['decomposition']['is_complex']}")
-                print(f"Sub-queries: {result['decomposition'].get('sub_queries_executed', 0)}")
-            
-            print(f"\nAnswer Preview:")
-            print(result.get('answer', 'No answer')[:300] + "...")
-            
-        except Exception as e:
-            print(f"Error: {e}")
+            manager = get_cache_manager()
+            cache_stats = manager.get_all_stats()
+            stats['cache_performance'] = cache_stats.get('_aggregate', {})
+        except:
+            pass
+    
+    return stats
+
+# ============================================
+# TESTING
+# ============================================
 
 if __name__ == "__main__":
-    test_enhanced_system()
+    # Test the system with all optimizations
+    test_queries = [
+        "What's the total spending?",  # Should use smart routing
+        "Compare Dell and IBM",  # Should use hybrid
+        "Which vendors should we optimize?",  # Should use LLM
+        "Show me spending patterns",  # Should use semantic
+    ]
+    
+    print("Testing Hybrid RAG Logic with Template Support")
+    print("=" * 60)
+    
+    # Enable features for testing
+    FEATURES['smart_routing'] = True
+    FEATURES['unified_analysis'] = True
+    FEATURES['grounded_prompts'] = True
+    FEATURES['template_parsing'] = True
+    
+    print("\nFeatures Enabled:")
+    for feature, enabled in FEATURES.items():
+        if enabled:
+            print(f"  ✓ {feature}")
+    
+    print("\n" + "-" * 60)
+    
+    for query in test_queries:
+        print(f"\nQuery: {query}")
+        print("-" * 40)
+        
+        result = answer_question_intelligent(query, mode="auto")
+        
+        print(f"Source: {result.get('source', 'Unknown')}")
+        print(f"Confidence: {result.get('confidence', 0)}%")
+        print(f"Processing Time: {result.get('processing_time', 0):.2f}s")
+        print(f"LLM Bypassed: {result.get('llm_bypassed', False)}")
+        print(f"Template Parsing: {result.get('template_parsing', False)}")
+        
+        if result.get('template_extracted'):
+            print(f"Template Extracted: Yes")
+        
+        answer = result.get('answer', 'No answer')
+        print(f"\nAnswer: {answer[:200]}...")
+        print("-" * 40)
+    
+    # Show performance stats
+    print("\n" + "=" * 60)
+    print("SYSTEM PERFORMANCE STATS")
+    print("=" * 60)
+    
+    stats = get_system_performance_stats()
+    print("\nFeatures Enabled:")
+    for feature, enabled in stats['features_enabled'].items():
+        status = "✓" if enabled else "✗"
+        print(f"  {status} {feature}")
+    
+    print("\nComponents Available:")
+    for component, available in stats['components_available'].items():
+        status = "✓" if available else "✗"
+        print(f"  {status} {component}")
