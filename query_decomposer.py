@@ -9,6 +9,7 @@ import os
 import re
 import json
 import logging
+import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Tuple, Optional
 from dataclasses import asdict
 from functools import lru_cache
@@ -25,7 +26,7 @@ from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from pydantic import BaseModel, Field, validator
 
 # Import template extraction utilities
-from template_utils import extract_template_response
+from template_utils import extract_from_template_response
 
 # Import from updated constants
 from constants import (
@@ -151,13 +152,28 @@ class MockChatWatsonx:
         # Return a structured response based on keywords in the prompt
         if "UNIFIED_ANALYSIS_PROMPT" in prompt or "expert procurement query analyzer" in prompt:
             # This is for the decompose_query function
-            mock_analysis = {
-                "intent": "comparison", "confidence": 0.95,
-                "entities": {"vendors": ["Dell", "IBM"], "metrics": ["spending"], "time_periods": [], "commodities": []},
-                "complexity": "simple", "suggested_approach": "hybrid",
-                "requires_decomposition": False, "sub_queries": [], "ambiguous_references": {}
-            }
-            return AIMessage(content=json.dumps(mock_analysis))
+            mock_xml_response = """
+            <analysis>
+              <intent>comparison</intent>
+              <confidence>0.95</confidence>
+              <entities>
+                <vendors>
+                  <vendor>Dell</vendor>
+                  <vendor>IBM</vendor>
+                </vendors>
+                <metrics>
+                  <metric>spending</metric>
+                </metrics>
+                <time_periods />
+                <commodities />
+              </entities>
+              <complexity>simple</complexity>
+              <suggested_approach>hybrid</suggested_approach>
+              <requires_decomposition>false</requires_decomposition>
+              <sub_queries />
+            </analysis>
+            """
+            return AIMessage(content=mock_xml_response)
         elif "GROUNDED_STATISTICAL_PROMPT" in prompt or "statistical analysis" in prompt:
             # This is for interpret_statistics
             return AIMessage(content="<STATISTICAL_ANALYSIS><SUMMARY>The mock analysis shows stable spending.</SUMMARY><FINDING1>Mock Finding: The median is close to the mean.</FINDING1></STATISTICAL_ANALYSIS>")
@@ -279,7 +295,7 @@ class LLMQueryDecomposer:
         # Check if template parsing is enabled
         if FEATURES.get('template_parsing', False):
             # Use the template extraction function
-            extracted = extract_template_response(response_text)
+            extracted = extract_from_template_response(response_text)
             if extracted != response_text:
                 logger.debug("Extracted template response")
                 return extracted
@@ -320,27 +336,62 @@ class LLMQueryDecomposer:
             llm_response = self.decomposer_llm.invoke(prompt)
             self.total_llm_calls += 1
             
-            # Parse the JSON response
+            # Parse the XML response
             try:
-                # Extract JSON from response
                 response_text = llm_response.content
+                # Clean the response to grab only the XML part
+                xml_match = re.search(r'<analysis>.*</analysis>', response_text, re.DOTALL)
+                if not xml_match:
+                    raise ValueError("No <analysis> tag found in the response.")
                 
-                # Try to find JSON in the response
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group()
-                    analysis_dict = json.loads(json_str)
-                else:
-                    # Try parsing entire response as JSON
-                    analysis_dict = json.loads(response_text)
+                xml_str = xml_match.group(0)
+                root = ET.fromstring(xml_str)
+
+                # Helper to safely get text from an element
+                def get_text(element, tag):
+                    return element.find(tag).text if element.find(tag) is not None else None
+
+                # Extract entities
+                entities = {}
+                entity_root = root.find('entities')
+                if entity_root is not None:
+                    for entity_type in ['vendors', 'metrics', 'time_periods', 'commodities']:
+                        entities[entity_type] = [el.text for el in entity_root.findall(f'{entity_type}/*') if el.text]
+
+                analysis_dict = {
+                    "intent": get_text(root, 'intent'),
+                    "confidence": float(get_text(root, 'confidence') or 0.0),
+                    "entities": entities,
+                    "complexity": get_text(root, 'complexity'),
+                    "suggested_approach": get_text(root, 'suggested_approach'),
+                    "requires_decomposition": get_text(root, 'requires_decomposition').lower() == 'true' if get_text(root, 'requires_decomposition') else False,
+                    "sub_queries": [el.text for el in root.findall('sub_queries/query') if el.text],
+                }
                 
-                # Create UnifiedQueryAnalysis from dict
                 analysis = UnifiedQueryAnalysis(**analysis_dict)
+
+            except (ET.ParseError, ValueError, Exception) as e:
+                logger.warning(f"Failed to parse XML response: {e}. Falling back to regex.")
+                # Fallback to regex if XML is malformed
+                def regex_extract(tag, text):
+                    match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL)
+                    return match.group(1).strip() if match else None
                 
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Failed to parse unified response, using fixing parser: {e}")
-                # Try to fix with output parser
-                analysis = self.fixing_parser.parse(llm_response.content)
+                response_text = llm_response.content
+                analysis = UnifiedQueryAnalysis(
+                    intent=regex_extract('intent', response_text) or 'other',
+                    confidence=float(regex_extract('confidence', response_text) or 0.5),
+                    entities={
+                        'vendors': re.findall(r'<vendor>(.*?)</vendor>', response_text),
+                        'metrics': re.findall(r'<metric>(.*?)</metric>', response_text),
+                        'time_periods': re.findall(r'<time_period>(.*?)</time_period>', response_text),
+                        'commodities': re.findall(r'<commodity>(.*?)</commodity>', response_text),
+                    },
+                    complexity=regex_extract('complexity', response_text) or 'simple',
+                    suggested_approach=regex_extract('suggested_approach', response_text) or 'hybrid',
+                    requires_decomposition=(regex_extract('requires_decomposition', response_text) or 'false').lower() == 'true',
+                    sub_queries=re.findall(r'<sub_queries><query>(.*?)</query></sub_queries>', response_text)
+                )
             
             # Post-process to resolve vendor aliases
             if analysis.entities.get('vendors'):
@@ -954,6 +1005,8 @@ def decompose_query(query: str, use_cache: bool = True) -> Dict[str, Any]:
             },
             'is_complex': unified.requires_decomposition,
             'suggested_approach': unified.suggested_approach,
+            'complexity': unified.complexity,
+            'sub_queries': unified.sub_queries,
             'template_parsing': FEATURES.get('template_parsing', False)
         }
     

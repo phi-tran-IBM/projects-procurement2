@@ -96,7 +96,7 @@ LLM_TOP_P = float(os.getenv("LLM_TOP_P", "0.95"))
 # ============================================
 
 # Unified Analysis Prompt - Single call instead of 3-4
-UNIFIED_ANALYSIS_PROMPT = """You are an expert procurement query analyzer. Your task is to analyze a user's query and provide a structured JSON output. Think step-by-step to deconstruct the query before you respond.
+UNIFIED_ANALYSIS_PROMPT = """You are an expert procurement query analyzer. Your task is to analyze a user's query and provide a structured XML output. Think step-by-step to deconstruct the query before you respond.
 
 <query>
 {query}
@@ -105,46 +105,67 @@ UNIFIED_ANALYSIS_PROMPT = """You are an expert procurement query analyzer. Your 
 <example>
   <query>Compare spending on Dell vs IBM last year, and recommend which to invest in.</query>
   <output>
-    {{
-      "intent": "comparison",
-      "complexity": "complex",
-      "requires_decomposition": true,
-      "sub_queries": [
-        "What was the total spending on Dell last year?",
-        "What was the total spending on IBM last year?",
-        "Recommend which vendor to invest in based on spending."
-      ],
-      "entities": {{
-        "vendors": ["Dell", "IBM"],
-        "metrics": ["spending", "invest"],
-        "time_periods": ["last year"],
-        "commodities": []
-      }},
-      "suggested_approach": "hybrid"
-    }}
+    <analysis>
+      <intent>comparison</intent>
+      <confidence>0.95</confidence>
+      <entities>
+        <vendors>
+          <vendor>Dell</vendor>
+          <vendor>IBM</vendor>
+        </vendors>
+        <metrics>
+          <metric>spending</metric>
+          <metric>invest</metric>
+        </metrics>
+        <time_periods>
+          <time_period>last year</time_period>
+        </time_periods>
+        <commodities />
+      </entities>
+      <complexity>complex</complexity>
+      <suggested_approach>hybrid</suggested_approach>
+      <requires_decomposition>true</requires_decomposition>
+      <sub_queries>
+        <query>What was the total spending on Dell last year?</query>
+        <query>What was the total spending on IBM last year?</query>
+        <query>Recommend which vendor to invest in based on spending.</query>
+      </sub_queries>
+    </analysis>
   </output>
 </example>
 
-Carefully analyze the user's query and return ONLY the JSON object with the required structure.
+Carefully analyze the user's query and return ONLY the XML object with the required structure.
 
 <output_structure>
-{{
-  "intent": "comparison|aggregation|ranking|lookup|statistical|trend|recommendation|exploration|other",
-  "confidence": 0.0-1.0,
-  "entities": {{
-    "vendors": ["list of vendor names mentioned"],
-    "metrics": ["spending", "count", "average", etc."],
-    "time_periods": ["any time references"],
-    "commodities": ["product/service categories"]
-  }},
-  "complexity": "simple|complex",
-  "suggested_approach": "sql|semantic|hybrid",
-  "requires_decomposition": true|false,
-  "sub_queries": ["list of sub-queries if complex, otherwise empty"]
-}}
+<analysis>
+  <intent>comparison|aggregation|ranking|lookup|statistical|trend|recommendation|exploration|other</intent>
+  <confidence>0.0-1.0</confidence>
+  <entities>
+    <vendors>
+      <vendor>list of vendor names mentioned</vendor>
+    </vendors>
+    <metrics>
+      <metric>spending</metric>
+      <metric>count</metric>
+      <metric>average</metric>
+    </metrics>
+    <time_periods>
+      <time_period>any time references</time_period>
+    </time_periods>
+    <commodities>
+      <commodity>product/service categories</commodity>
+    </commodities>
+  </entities>
+  <complexity>simple|complex</complexity>
+  <suggested_approach>sql|semantic|hybrid</suggested_approach>
+  <requires_decomposition>true|false</requires_decomposition>
+  <sub_queries>
+    <query>list of sub-queries if complex, otherwise empty</query>
+  </sub_queries>
+</analysis>
 </output_structure>
 
-Final JSON Output:"""
+Final XML Output:"""
 
 # Standard Grounded Response Prompts (Non-Template)
 GROUNDED_SYNTHESIS_PROMPT = """You are a procurement data analyst. You MUST base your response ONLY on the provided data.
@@ -178,6 +199,18 @@ Vendor Data:
 
 Question: {question}
 
+Structure your response with these XML tags:
+<comparison>
+  <summary>Brief overall comparison summary</summary>
+  <vendor>
+    <name>Vendor name from data</name>
+    <performance>Total spending, orders, and key metrics from data</performance>
+    <strengths>What this vendor does well based on the numbers</strengths>
+    <concerns>Any concerns based on the data</concerns>
+  </vendor>
+  <recommendation>Which vendor to prefer and why, based solely on the data</recommendation>
+</comparison>
+
 Remember: Do not add any information not present in the provided Vendor Data.
 
 Comparison Analysis:"""
@@ -192,15 +225,16 @@ GROUNDED_RECOMMENDATION_PROMPT = """You are a strategic procurement advisor. You
 {focus}
 </focus_area>
 
-Generate a JSON array of strategic recommendations with the following structure. Each recommendation MUST include a justification that references specific data points, numbers, and vendor names from the context.
-[
-  {{
-    "recommendation": "Your strategic advice here.",
-    "justification": "Explain exactly which data points from the context support this recommendation. Reference specific numbers and vendor names."
-  }}
-]
+Generate an XML structure of strategic recommendations. Each recommendation MUST include a justification that references specific data points, numbers, and vendor names from the context.
 
-If the data is insufficient to make a recommendation, return an empty array []. Do not add any text or explanation outside of the JSON array.
+<recommendations>
+  <recommendation>
+    <action>Your strategic advice here.</action>
+    <justification>Explain exactly which data points from the context support this recommendation. Reference specific numbers and vendor names.</justification>
+  </recommendation>
+</recommendations>
+
+If the data is insufficient to make a recommendation, return an empty <recommendations /> element. Do not add any text or explanation outside of the XML structure.
 
 Strategic Recommendations:"""
 
@@ -214,6 +248,14 @@ RULES:
 
 Statistical Results:
 {statistics}
+
+Structure your response with these XML tags:
+<statistical_analysis>
+  <summary>Brief summary of the statistical findings</summary>
+  <finding>First key statistical insight with specific numbers</finding>
+  <business_impact>What these statistics mean for the business</business_impact>
+  <recommendations>Actions to take based on these statistics</recommendations>
+</statistical_analysis>
 
 Remember: Your interpretation must be based exclusively on the provided Statistical Results.
 

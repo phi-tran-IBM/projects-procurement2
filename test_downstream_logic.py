@@ -5,14 +5,36 @@ import os
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 
-from app_helpers import (
+from template_utils import (
     extract_recommendation_template,
     extract_comparison_template,
     extract_statistical_template,
     extract_synthesis_template
 )
+from query_decomposer import decompose_query, UnifiedQueryAnalysis
 
 class TestDownstreamLogic(unittest.TestCase):
+
+    def test_unified_analysis_xml_parser(self):
+        print("\nTesting: test_unified_analysis_xml_parser")
+        # This test uses the mock response from the LLMQueryDecomposer
+        query = "Compare Dell and IBM spending"
+        result = decompose_query(query)
+
+        # Validate the structure and content
+        self.assertIsInstance(result, dict)
+        self.assertIn('intent', result)
+        self.assertEqual(result['intent']['primary_intent'], 'comparison')
+        self.assertAlmostEqual(result['intent']['confidence'], 0.95)
+        self.assertIn('entities', result)
+        self.assertEqual(sorted(result['entities']['vendors']), sorted(['DELL', 'IBM']))
+        self.assertEqual(sorted(result['entities']['metrics']), sorted(['spending']))
+        self.assertEqual(result['complexity'], 'simple')
+        self.assertEqual(result['suggested_approach'], 'hybrid')
+        self.assertFalse(result['is_complex'])
+        self.assertEqual(result['sub_queries'], [])
+
+        print("Test Passed.")
 
     def test_extract_recommendation_template(self):
         print("\nTesting: test_extract_recommendation_template")
@@ -40,22 +62,22 @@ class TestDownstreamLogic(unittest.TestCase):
     def test_extract_comparison_template(self):
         print("\nTesting: test_extract_comparison_template")
         mock_llm_response = """
-        <COMPARISON_START>
-        <SUMMARY>DELL INC has higher total spending, but IBM has a higher average order value.</SUMMARY>
-        <VENDOR1>
-        <NAME>DELL INC</NAME>
-        <PERFORMANCE>Total spending: $1500.00, Order count: 2</PERFORMANCE>
-        <STRENGTHS>Consistent order volume.</STRENGTHS>
-        <CONCERNS>Lower average order value compared to IBM.</CONCERNS>
-        </VENDOR1>
-        <VENDOR2>
-        <NAME>INTERNATIONAL BUSINESS MACHINES</NAME>
-        <PERFORMANCE>Total spending: $2000.00, Order count: 1</PERFORMANCE>
-        <STRENGTHS>High-value single orders.</STRENGTHS>
-        <CONCERNS>Low order frequency.</CONCERNS>
-        </VENDOR2>
-        <RECOMMENDATION>Focus on DELL for regular purchases, and IBM for strategic high-value items.</RECOMMENDATION>
-        </COMPARISON_START>
+        <comparison>
+        <summary>DELL INC has higher total spending, but IBM has a higher average order value.</summary>
+        <vendor>
+        <name>DELL INC</name>
+        <performance>Total spending: $1500.00, Order count: 2</performance>
+        <strengths>Consistent order volume.</strengths>
+        <concerns>Lower average order value compared to IBM.</concerns>
+        </vendor>
+        <vendor>
+        <name>INTERNATIONAL BUSINESS MACHINES</name>
+        <performance>Total spending: $2000.00, Order count: 1</performance>
+        <strengths>High-value single orders.</strengths>
+        <concerns>Low order frequency.</concerns>
+        </vendor>
+        <recommendation>Focus on DELL for regular purchases, and IBM for strategic high-value items.</recommendation>
+        </comparison>
         """
         expected_output = "Summary: DELL INC has higher total spending, but IBM has a higher average order value.\n\n**DELL INC**\nPerformance: Total spending: $1500.00, Order count: 2\nStrengths: Consistent order volume.\nConcerns: Lower average order value compared to IBM.\n\n**INTERNATIONAL BUSINESS MACHINES**\nPerformance: Total spending: $2000.00, Order count: 1\nStrengths: High-value single orders.\nConcerns: Low order frequency.\n\nRecommendation: Focus on DELL for regular purchases, and IBM for strategic high-value items."
         actual_output = extract_comparison_template(mock_llm_response)
