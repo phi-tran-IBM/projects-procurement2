@@ -10,7 +10,7 @@ import json
 from typing import Dict, Any, List, Optional, Tuple
 
 from constants import (
-    VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL,
+    VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL, DATE_COL,
     # Import new dynamic prompt functions
     get_grounded_synthesis_prompt, get_grounded_recommendation_prompt,
     get_grounded_comparison_prompt, get_grounded_statistical_prompt,
@@ -994,9 +994,46 @@ def generate_report_conclusions(report: Dict) -> str:
     return "Analysis complete for: " + ", ".join(conclusions)
 
 def generate_report_recommendations(report: Dict) -> str:
-    """Generate report recommendations."""
-    recs = generate_dashboard_recommendations()
-    return "\n".join(recs)
+    """
+    Generate strategic recommendations based on the content of the report.
+    This function calls the more powerful get_strategic_recommendations for each
+    section in the report to generate context-specific advice.
+    """
+    all_recs = []
+
+    # Mapping from report section area to a strategic context
+    context_mapping = {
+        'spending': 'cost optimization',
+        'vendors': 'vendor management and consolidation',
+        'efficiency': 'procurement process improvement',
+        'executive_summary': 'overall procurement strategy',
+        'conclusions': 'strategic planning'
+    }
+
+    report_sections = report.get('sections', {})
+    if not report_sections:
+        return "No report sections available to generate recommendations."
+
+    for area in report_sections.keys():
+        context = context_mapping.get(area.lower())
+        if context:
+            logger.info(f"Generating report recommendations for area: {area} with context: {context}")
+            # Get strategic recommendations for this context
+            strategic_rec_dict = get_strategic_recommendations(context)
+
+            # Extract the text answer
+            rec_text = extract_text_from_response(strategic_rec_dict)
+
+            if rec_text and "error" not in rec_text.lower() and "insufficient data" not in rec_text.lower():
+                # Add a title for each section's recommendations
+                all_recs.append(f"--- Recommendations for {area.replace('_', ' ').title()} ---")
+                all_recs.append(rec_text)
+                all_recs.append("") # Add a blank line for spacing
+
+    if not all_recs:
+        return "Could not generate specific recommendations based on the report data."
+
+    return "\n".join(all_recs)
 
 def generate_report_visualizations(report: Dict) -> List[Dict]:
     """Generate visualization configurations."""
@@ -1007,11 +1044,50 @@ def generate_report_visualizations(report: Dict) -> List[Dict]:
     ]
 
 def get_trend_data() -> Dict:
-    """Get trend data (placeholder as no date column available)."""
-    return {
-        "message": "Trend analysis requires date information",
-        "available": False
-    }
+    """
+    Get trend data for spending over time.
+    This function queries the database to get monthly spending totals.
+    """
+    query = f"""
+    SELECT
+        strftime('%Y-%m', {DATE_COL}) as month,
+        SUM(CAST({COST_COL} AS FLOAT)) as total_spending
+    FROM procurement
+    WHERE {DATE_COL} IS NOT NULL AND {COST_COL} IS NOT NULL
+    GROUP BY month
+    ORDER BY month ASC
+    """
+
+    try:
+        df = safe_execute_query(query)
+
+        if df.empty:
+            return {
+                "available": False,
+                "message": "Insufficient data to generate trend analysis."
+            }
+
+        # Format for chart
+        labels = df['month'].tolist()
+        data = df['total_spending'].tolist()
+
+        return {
+            "available": True,
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Total Spending per Month",
+                    "data": data
+                }
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get trend data: {e}")
+        return {
+            "available": False,
+            "message": f"An error occurred while generating trend data: {e}"
+        }
 
 def generate_alerts() -> List[Dict]:
     """Generate system alerts based on thresholds."""

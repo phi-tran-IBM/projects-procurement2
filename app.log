@@ -1,0 +1,50 @@
+INFO:hybrid_rag_architecture:LLM components loaded for enhanced processing
+WARNING:discovery_store:DISCOVERY_URL not set. Using MockElasticsearch for testing purposes.
+WARNING:app_helpers:LLM components not available
+INFO:__main__:CORS enabled for cross-origin requests
+======================================================================
+  PROCUREMENT RAG API - OPTIMIZED PRODUCTION SERVER v3.1
+======================================================================
+  Port: 8080
+  Host: 0.0.0.0
+======================================================================
+  OPTIMIZATIONS STATUS:
+  ✓ Smart Routing:      ✅ ENABLED
+  ✓ Unified Analysis:   ✅ ENABLED
+  ✓ VendorResolver:     ✅ ENABLED
+  ✓ Grounded Prompts:   ✅ ENABLED
+  ✓ Granular Caching:   ✅ ENABLED
+  ✓ Tiered Search:      ✅ ENABLED
+  ✓ Template Parsing:   ✅ ENABLED
+======================================================================
+  COMPONENTS:
+  • LLM Decomposer:     ✅ AVAILABLE
+  • Enhanced RAG:       ✅ AVAILABLE
+  • Cache System:       ✅ AVAILABLE
+  • CORS Support:       ✅ ENABLED
+======================================================================
+  PERFORMANCE TARGETS:
+  • Simple Query:       < 2.0s
+  • SQL Query:          < 5.0s
+  • Semantic Query:     < 10.0s
+  • Complex Query:      < 15.0s
+======================================================================
+
+  To enable optimizations, set environment variables:
+  export ENABLE_SMART_ROUTING=true
+  export ENABLE_UNIFIED_ANALYSIS=true
+  export ENABLE_CENTRAL_RESOLVER=true
+  export ENABLE_GROUNDED_PROMPTS=true
+  export ENABLE_GRANULAR_CACHING=true
+  export ENABLE_TIERED_SEARCH=true
+  export ENABLE_TEMPLATE_PARSING=true
+
+  Server starting...
+======================================================================
+ * Serving Flask app 'app'
+ * Debug mode: off
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8080
+ * Running on http://192.168.0.2:8080
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
