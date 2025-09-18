@@ -158,6 +158,14 @@ validation_tests.py
 root_cause_analysis_*.json
 test_results_*.json
 implementation_audit_*.log
+api_test_logs/
+api_performance_*.csv
+api_results_*.json
+api_test_*.log
+test_logs/
+performance_*.csv
+results_*.json
+test_run_*.log
 
 # Runtime Files
 *.pid

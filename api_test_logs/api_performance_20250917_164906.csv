@@ -1,7 +1,0 @@
-test,status,elapsed_time,notes
-Smart Routing,PASSED,0.11366772651672363,LLM correctly bypassed.
-Vendor Resolver (DELL),PASSED,4.84457802772522,Successfully resolved DELL.
-Cache Test (1st Call),INFO,5.836109161376953,Populating cache.
-Cache Performance,PASSED,0.0030510425567626953,Cache hit with 99.95% speedup.
-Multi-Step Query,FAILED,18.457226991653442,"Failed to decompose. Complex: True, Sub-queries: 0."
-Semantic Recommendation Query,FAILED,11.118689060211182,Answer appears to be generic or non-strategic.
