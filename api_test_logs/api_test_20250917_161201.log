@@ -1,0 +1,548 @@
+2025-09-17 16:12:01,706 | INFO     | main                      | Test Run ID: 20250917_161201
+2025-09-17 16:12:01,706 | INFO     | main                      | Log File: api_test_logs/api_test_20250917_161201.log
+2025-09-17 16:12:01,706 | INFO     | main                      | Results: api_test_logs/api_results_20250917_161201.json
+2025-09-17 16:12:01,706 | INFO     | main                      | API URL: http://localhost:8080
+2025-09-17 16:12:01,707 | INFO     | run_all_tests             | 
+======================================================================
+2025-09-17 16:12:01,707 | INFO     | run_all_tests             | API TEST SUITE - Testing http://localhost:8080
+2025-09-17 16:12:01,707 | INFO     | run_all_tests             | ======================================================================
+2025-09-17 16:12:01,707 | INFO     | check_api_health          | 
+🔍 Checking API Health...
+2025-09-17 16:12:01,707 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/health
+2025-09-17 16:12:02,061 | DEBUG    | _make_request             |    Response: 200 in 0.35s
+2025-09-17 16:12:02,061 | INFO     | check_api_health          |    ✅ API is healthy and responding
+2025-09-17 16:12:02,061 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/health
+2025-09-17 16:12:02,235 | DEBUG    | _make_request             |    Response: 200 in 0.17s
+2025-09-17 16:12:02,235 | INFO     | check_api_health          |    📊 Component Status:
+2025-09-17 16:12:02,237 | INFO     | check_api_health          |       • cache: healthy
+2025-09-17 16:12:02,237 | INFO     | check_api_health          |       • database: healthy
+2025-09-17 16:12:02,237 | INFO     | check_api_health          |       • enhanced_rag: available
+2025-09-17 16:12:02,237 | INFO     | check_api_health          |       • llm_decomposer: available
+2025-09-17 16:12:02,237 | INFO     | check_api_health          |       • vendor_resolver: healthy
+2025-09-17 16:12:02,237 | INFO     | run_all_tests             | 
+--------------------------------------------------
+2025-09-17 16:12:02,237 | INFO     | run_all_tests             | OPTIMIZATION TESTS
+2025-09-17 16:12:02,237 | INFO     | run_all_tests             | --------------------------------------------------
+2025-09-17 16:12:02,238 | INFO     | test_smart_routing        | 
+🧪 Testing Smart Routing...
+2025-09-17 16:12:02,238 | INFO     | test_smart_routing        |    Testing: Simple aggregation - should bypass LLM
+2025-09-17 16:12:02,238 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:02,238 | DEBUG    | _make_request             |    Payload: {
+  "question": "total spending",
+  "mode": "auto"
+}
+2025-09-17 16:12:02,448 | DEBUG    | _make_request             |    Response: 200 in 0.21s
+2025-09-17 16:12:02,448 | INFO     | test_smart_routing        |       ✅ LLM bypassed, responded in 0.21s
+2025-09-17 16:12:02,448 | INFO     | test_smart_routing        |       ✅ Met <1s target
+2025-09-17 16:12:02,448 | INFO     | test_smart_routing        |    Testing: Simple calculation - should bypass LLM
+2025-09-17 16:12:02,448 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:02,448 | DEBUG    | _make_request             |    Payload: {
+  "question": "average order value",
+  "mode": "auto"
+}
+2025-09-17 16:12:02,607 | DEBUG    | _make_request             |    Response: 200 in 0.16s
+2025-09-17 16:12:02,607 | INFO     | test_smart_routing        |       ✅ LLM bypassed, responded in 0.16s
+2025-09-17 16:12:02,607 | INFO     | test_smart_routing        |       ✅ Met <1s target
+2025-09-17 16:12:02,607 | INFO     | test_smart_routing        |    Testing: Simple count - should bypass LLM
+2025-09-17 16:12:02,607 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:02,607 | DEBUG    | _make_request             |    Payload: {
+  "question": "how many vendors",
+  "mode": "auto"
+}
+2025-09-17 16:12:02,833 | DEBUG    | _make_request             |    Response: 500 in 0.23s
+2025-09-17 16:12:02,834 | WARNING  | _make_request             |    ⚠️  Non-200 status: 500
+2025-09-17 16:12:02,834 | DEBUG    | _make_request             |    Response body: {"error":"Object of type int64 is not JSON serializable"}
+
+2025-09-17 16:12:02,834 | ERROR    | test_smart_routing        |       ❌ Request failed
+2025-09-17 16:12:02,834 | INFO     | test_vendor_resolver      | 
+🧪 Testing VendorResolver...
+2025-09-17 16:12:02,834 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/resolve-vendor/DELL
+2025-09-17 16:12:03,041 | DEBUG    | _make_request             |    Response: 200 in 0.21s
+2025-09-17 16:12:03,042 | INFO     | test_vendor_resolver      |    Testing: Should resolve to DELL
+2025-09-17 16:12:03,042 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/resolve-vendor/DELL COMPUTER CORP
+2025-09-17 16:12:04,302 | DEBUG    | _make_request             |    Response: 200 in 1.26s
+2025-09-17 16:12:04,319 | WARNING  | test_vendor_resolver      |       ⚠️  No canonical name found
+2025-09-17 16:12:04,320 | INFO     | test_vendor_resolver      |    Testing: Should handle typo -> Microsoft
+2025-09-17 16:12:04,339 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/resolve-vendor/Microsft
+2025-09-17 16:12:05,617 | DEBUG    | _make_request             |    Response: 200 in 1.28s
+2025-09-17 16:12:05,618 | WARNING  | test_vendor_resolver      |       ⚠️  No canonical name found
+2025-09-17 16:12:05,618 | INFO     | test_vendor_resolver      |    Testing: Should resolve to IBM
+2025-09-17 16:12:05,618 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/resolve-vendor/IBM CORPORATION
+2025-09-17 16:12:07,166 | DEBUG    | _make_request             |    Response: 200 in 1.55s
+2025-09-17 16:12:07,167 | WARNING  | test_vendor_resolver      |       ⚠️  No canonical name found
+2025-09-17 16:12:07,167 | INFO     | test_vendor_resolver      |    Testing: Should handle partial name
+2025-09-17 16:12:07,167 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/resolve-vendor/AMAZN
+2025-09-17 16:12:08,630 | DEBUG    | _make_request             |    Response: 200 in 1.46s
+2025-09-17 16:12:08,631 | WARNING  | test_vendor_resolver      |       ⚠️  No canonical name found
+2025-09-17 16:12:08,631 | INFO     | test_vendor_resolver      |    Testing resolver in actual queries...
+2025-09-17 16:12:08,631 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:08,631 | DEBUG    | _make_request             |    Payload: {
+  "question": "spending with DELL COMPUTER CORP",
+  "mode": "auto"
+}
+2025-09-17 16:12:12,568 | DEBUG    | _make_request             |    Response: 200 in 3.94s
+2025-09-17 16:12:12,569 | INFO     | test_vendor_resolver      |       ✅ Query with vendor variation worked
+2025-09-17 16:12:12,569 | INFO     | test_cache_performance    | 
+🧪 Testing Cache Performance...
+2025-09-17 16:12:12,569 | INFO     | test_cache_performance    |    First request (expecting cache miss)...
+2025-09-17 16:12:12,569 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:12,569 | DEBUG    | _make_request             |    Payload: {
+  "question": "top 10 vendors by spending",
+  "mode": "auto"
+}
+2025-09-17 16:12:13,044 | DEBUG    | _make_request             |    Response: 200 in 0.47s
+2025-09-17 16:12:13,546 | INFO     | test_cache_performance    |    Second request (expecting cache hit)...
+2025-09-17 16:12:13,546 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:13,546 | DEBUG    | _make_request             |    Payload: {
+  "question": "top 10 vendors by spending",
+  "mode": "auto"
+}
+2025-09-17 16:12:13,552 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:13,552 | INFO     | test_cache_performance    |    📊 First call: 0.47s (cache hit: None)
+2025-09-17 16:12:13,553 | INFO     | test_cache_performance    |    📊 Second call: 0.01s (cache hit: final_result)
+2025-09-17 16:12:13,553 | INFO     | test_cache_performance    |    ⚡ Speedup: 98.8%
+2025-09-17 16:12:13,553 | INFO     | test_cache_performance    |    ✅ Cache is working effectively
+2025-09-17 16:12:13,553 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/cache/stats
+2025-09-17 16:12:13,557 | DEBUG    | _make_request             |    Response: 200 in 0.00s
+2025-09-17 16:12:13,558 | INFO     | test_cache_performance    |    📊 Cache stats: {
+  "_aggregate": {
+    "cache_count": 7,
+    "overall_hit_rate": 0,
+    "total_entries": 0,
+    "total_hits": 0,
+    "total_misses": 0,
+    "total_requests": 0
+  },
+  "decomposition": {
+    "cache_type": "decomposition",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 1000,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 7200,
+    "utilization": 0.0
+  },
+  "entity_extraction": {
+    "cache_type": "entity_extraction",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 500,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 7200,
+    "utilization": 0.0
+  },
+  "final_result": {
+    "cache_type": "final_result",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 500,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 1800,
+    "utilization": 0.0
+  },
+  "semantic_search": {
+    "cache_type": "semantic_search",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 300,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 1800,
+    "utilization": 0.0
+  },
+  "statistical": {
+    "cache_type": "statistical",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 200,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 300,
+    "utilization": 0.0
+  },
+  "unified_analysis": {
+    "cache_type": "unified_analysis",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 500,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 7200,
+    "utilization": 0.0
+  },
+  "vendor_resolution": {
+    "cache_type": "vendor_resolution",
+    "created_at": "Wed, 17 Sep 2025 16:12:02 GMT",
+    "current_size": 0,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "max_size": 2000,
+    "miss_rate": 0.0,
+    "misses": 0,
+    "total_requests": 0,
+    "ttl": 3600,
+    "utilization": 0.0
+  }
+}
+2025-09-17 16:12:13,558 | INFO     | test_unified_analysis     | 
+🧪 Testing Unified Analysis...
+2025-09-17 16:12:13,558 | INFO     | test_unified_analysis     |    Testing complex query: Compare Dell and IBM and recommend which one to in...
+2025-09-17 16:12:13,558 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask-advanced
+2025-09-17 16:12:13,558 | DEBUG    | _make_request             |    Payload: {
+  "question": "Compare Dell and IBM and recommend which one to invest in"
+}
+2025-09-17 16:12:13,663 | DEBUG    | _make_request             |    Response: 200 in 0.10s
+2025-09-17 16:12:13,663 | INFO     | test_unified_analysis     |       ⏱️  Response time: 0.10s
+2025-09-17 16:12:13,663 | INFO     | test_unified_analysis     |       📊 Optimization path: Unified Analysis (1 LLM call)
+2025-09-17 16:12:13,663 | INFO     | test_unified_analysis     |       ✅ Good performance for complex query
+2025-09-17 16:12:13,663 | INFO     | test_unified_analysis     |    Testing complex query: Which vendors should we drop based on low performa...
+2025-09-17 16:12:13,663 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask-advanced
+2025-09-17 16:12:13,663 | DEBUG    | _make_request             |    Payload: {
+  "question": "Which vendors should we drop based on low performance and why?"
+}
+2025-09-17 16:12:13,852 | DEBUG    | _make_request             |    Response: 200 in 0.19s
+2025-09-17 16:12:13,852 | INFO     | test_unified_analysis     |       ⏱️  Response time: 0.19s
+2025-09-17 16:12:13,853 | INFO     | test_unified_analysis     |       📊 Optimization path: Unified Analysis (1 LLM call)
+2025-09-17 16:12:13,853 | INFO     | test_unified_analysis     |       ✅ Good performance for complex query
+2025-09-17 16:12:13,853 | INFO     | test_unified_analysis     |    Testing complex query: Analyze spending patterns and suggest optimization...
+2025-09-17 16:12:13,853 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask-advanced
+2025-09-17 16:12:13,853 | DEBUG    | _make_request             |    Payload: {
+  "question": "Analyze spending patterns and suggest optimization strategies"
+}
+2025-09-17 16:12:14,038 | DEBUG    | _make_request             |    Response: 200 in 0.19s
+2025-09-17 16:12:14,038 | INFO     | test_unified_analysis     |       ⏱️  Response time: 0.19s
+2025-09-17 16:12:14,038 | INFO     | test_unified_analysis     |       📊 Optimization path: Unified Analysis (1 LLM call)
+2025-09-17 16:12:14,038 | INFO     | test_unified_analysis     |       ✅ Good performance for complex query
+2025-09-17 16:12:14,039 | INFO     | run_all_tests             | 
+--------------------------------------------------
+2025-09-17 16:12:14,039 | INFO     | run_all_tests             | ENDPOINT TESTS
+2025-09-17 16:12:14,039 | INFO     | run_all_tests             | --------------------------------------------------
+2025-09-17 16:12:14,039 | INFO     | test_core_endpoints       | 
+🧪 Testing Core Endpoints...
+2025-09-17 16:12:14,039 | INFO     | test_core_endpoints       |    Testing GET /health: Health check
+2025-09-17 16:12:14,039 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/health
+2025-09-17 16:12:14,157 | DEBUG    | _make_request             |    Response: 200 in 0.12s
+2025-09-17 16:12:14,157 | INFO     | test_core_endpoints       |       ✅ Success in 0.12s
+2025-09-17 16:12:14,157 | INFO     | test_core_endpoints       |    Testing GET /dashboard: Dashboard data
+2025-09-17 16:12:14,157 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/dashboard
+2025-09-17 16:12:14,722 | DEBUG    | _make_request             |    Response: 500 in 0.56s
+2025-09-17 16:12:14,722 | WARNING  | _make_request             |    ⚠️  Non-200 status: 500
+2025-09-17 16:12:14,722 | DEBUG    | _make_request             |    Response body: {"error":"'dict' object has no attribute 'split'"}
+
+2025-09-17 16:12:14,722 | WARNING  | test_core_endpoints       |       ⚠️  Status 500 in 0.56s
+2025-09-17 16:12:14,722 | INFO     | test_core_endpoints       |    Testing GET /top-vendors: Top vendors
+2025-09-17 16:12:14,722 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/top-vendors
+2025-09-17 16:12:15,060 | DEBUG    | _make_request             |    Response: 200 in 0.34s
+2025-09-17 16:12:15,060 | INFO     | test_core_endpoints       |       ✅ Success in 0.34s
+2025-09-17 16:12:15,060 | INFO     | test_core_endpoints       |    Testing POST /ask: Basic query
+2025-09-17 16:12:15,061 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:15,061 | DEBUG    | _make_request             |    Payload: {
+  "question": "total spending"
+}
+2025-09-17 16:12:15,065 | DEBUG    | _make_request             |    Response: 200 in 0.00s
+2025-09-17 16:12:15,066 | INFO     | test_core_endpoints       |       ✅ Success in 0.00s
+2025-09-17 16:12:15,066 | INFO     | test_core_endpoints       |    Testing POST /insights: Vendor insights
+2025-09-17 16:12:15,066 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/insights
+2025-09-17 16:12:15,066 | DEBUG    | _make_request             |    Payload: {
+  "focus": "vendors"
+}
+2025-09-17 16:12:15,501 | DEBUG    | _make_request             |    Response: 200 in 0.43s
+2025-09-17 16:12:15,501 | INFO     | test_core_endpoints       |       ✅ Success in 0.43s
+2025-09-17 16:12:15,501 | INFO     | test_core_endpoints       |    Testing POST /compare: Vendor comparison
+2025-09-17 16:12:15,502 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/compare
+2025-09-17 16:12:15,502 | DEBUG    | _make_request             |    Payload: {
+  "vendors": [
+    "DELL",
+    "IBM"
+  ]
+}
+2025-09-17 16:12:15,726 | DEBUG    | _make_request             |    Response: 200 in 0.22s
+2025-09-17 16:12:15,727 | INFO     | test_core_endpoints       |       ✅ Success in 0.22s
+2025-09-17 16:12:15,727 | INFO     | test_statistics_endpoint  | 
+🧪 Testing Statistics Endpoint...
+2025-09-17 16:12:15,727 | INFO     | test_statistics_endpoint  |    Testing metric: mean
+2025-09-17 16:12:15,727 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/statistics/mean
+2025-09-17 16:12:15,727 | DEBUG    | _make_request             |    Payload: {}
+2025-09-17 16:12:16,082 | DEBUG    | _make_request             |    Response: 200 in 0.35s
+2025-09-17 16:12:16,082 | INFO     | test_statistics_endpoint  |       ✅ Calculated mean in 0.35s
+2025-09-17 16:12:16,082 | INFO     | test_statistics_endpoint  |       📊 Analyzed 225466 records
+2025-09-17 16:12:16,082 | INFO     | test_statistics_endpoint  |    Testing metric: median
+2025-09-17 16:12:16,082 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/statistics/median
+2025-09-17 16:12:16,082 | DEBUG    | _make_request             |    Payload: {}
+2025-09-17 16:12:16,432 | DEBUG    | _make_request             |    Response: 200 in 0.35s
+2025-09-17 16:12:16,432 | INFO     | test_statistics_endpoint  |       ✅ Calculated median in 0.35s
+2025-09-17 16:12:16,432 | INFO     | test_statistics_endpoint  |       📊 Analyzed 225466 records
+2025-09-17 16:12:16,432 | INFO     | test_statistics_endpoint  |    Testing metric: stddev
+2025-09-17 16:12:16,432 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/statistics/stddev
+2025-09-17 16:12:16,433 | DEBUG    | _make_request             |    Payload: {}
+2025-09-17 16:12:16,885 | DEBUG    | _make_request             |    Response: 200 in 0.45s
+2025-09-17 16:12:16,886 | INFO     | test_statistics_endpoint  |       ✅ Calculated stddev in 0.45s
+2025-09-17 16:12:16,886 | INFO     | test_statistics_endpoint  |       📊 Analyzed 225466 records
+2025-09-17 16:12:16,886 | INFO     | test_statistics_endpoint  |    Testing metric: all
+2025-09-17 16:12:16,886 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/statistics/all
+2025-09-17 16:12:16,886 | DEBUG    | _make_request             |    Payload: {}
+2025-09-17 16:12:17,271 | DEBUG    | _make_request             |    Response: 200 in 0.39s
+2025-09-17 16:12:17,272 | INFO     | test_statistics_endpoint  |       ✅ Calculated all in 0.39s
+2025-09-17 16:12:17,272 | INFO     | test_statistics_endpoint  |       📊 Analyzed 225466 records
+2025-09-17 16:12:17,272 | INFO     | test_vendor_endpoint      | 
+🧪 Testing Vendor Detail Endpoint...
+2025-09-17 16:12:17,273 | INFO     | test_vendor_endpoint      |    Testing vendor: DELL
+2025-09-17 16:12:17,273 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/vendor/DELL
+2025-09-17 16:12:17,497 | DEBUG    | _make_request             |    Response: 200 in 0.22s
+2025-09-17 16:12:17,497 | INFO     | test_vendor_endpoint      |       ✅ Found vendor data in 0.22s
+2025-09-17 16:12:17,497 | INFO     | test_vendor_endpoint      |    Testing vendor: IBM
+2025-09-17 16:12:17,497 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/vendor/IBM
+2025-09-17 16:12:17,612 | DEBUG    | _make_request             |    Response: 404 in 0.11s
+2025-09-17 16:12:17,612 | WARNING  | _make_request             |    ⚠️  Non-200 status: 404
+2025-09-17 16:12:17,612 | DEBUG    | _make_request             |    Response body: {"error":"Vendor 'IBM' not found."}
+
+2025-09-17 16:12:17,613 | INFO     | test_vendor_endpoint      |       ℹ️  Vendor not found (expected for invalid vendor)
+2025-09-17 16:12:17,613 | INFO     | test_vendor_endpoint      |    Testing vendor: MICROSOFT
+2025-09-17 16:12:17,613 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/vendor/MICROSOFT
+2025-09-17 16:12:18,156 | DEBUG    | _make_request             |    Response: 200 in 0.54s
+2025-09-17 16:12:18,156 | INFO     | test_vendor_endpoint      |       ✅ Found vendor data in 0.54s
+2025-09-17 16:12:18,157 | INFO     | test_vendor_endpoint      |    Testing vendor: InvalidVendor123
+2025-09-17 16:12:18,157 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/vendor/InvalidVendor123
+2025-09-17 16:12:19,166 | DEBUG    | _make_request             |    Response: 404 in 1.01s
+2025-09-17 16:12:19,167 | WARNING  | _make_request             |    ⚠️  Non-200 status: 404
+2025-09-17 16:12:19,167 | DEBUG    | _make_request             |    Response body: {"error":"Vendor 'InvalidVendor123' not found."}
+
+2025-09-17 16:12:19,167 | INFO     | test_vendor_endpoint      |       ℹ️  Vendor not found (expected for invalid vendor)
+2025-09-17 16:12:19,167 | INFO     | run_all_tests             | 
+--------------------------------------------------
+2025-09-17 16:12:19,167 | INFO     | run_all_tests             | LOAD TESTS
+2025-09-17 16:12:19,167 | INFO     | run_all_tests             | --------------------------------------------------
+2025-09-17 16:12:19,168 | INFO     | test_concurrent_requests  | 
+🧪 Testing Concurrent Requests (10 requests)...
+2025-09-17 16:12:19,168 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,168 | DEBUG    | _make_request             |    Payload: {
+  "question": "total spending"
+}
+2025-09-17 16:12:19,168 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,169 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,169 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,169 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,169 | DEBUG    | _make_request             |    Payload: {
+  "question": "top 5 vendors"
+}
+2025-09-17 16:12:19,170 | DEBUG    | _make_request             |    Payload: {
+  "question": "average order value"
+}
+2025-09-17 16:12:19,170 | DEBUG    | _make_request             |    Payload: {
+  "question": "compare DELL and IBM"
+}
+2025-09-17 16:12:19,170 | DEBUG    | _make_request             |    Payload: {
+  "question": "vendor count"
+}
+2025-09-17 16:12:19,180 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:19,181 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,181 | DEBUG    | _make_request             |    Payload: {
+  "question": "total spending"
+}
+2025-09-17 16:12:19,183 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:19,183 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,184 | DEBUG    | _make_request             |    Payload: {
+  "question": "top 5 vendors"
+}
+2025-09-17 16:12:19,187 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:19,187 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,188 | DEBUG    | _make_request             |    Payload: {
+  "question": "average order value"
+}
+2025-09-17 16:12:19,193 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:19,194 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,194 | DEBUG    | _make_request             |    Payload: {
+  "question": "compare DELL and IBM"
+}
+2025-09-17 16:12:19,196 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:19,197 | DEBUG    | _make_request             | 🌐 POST http://localhost:8080/ask
+2025-09-17 16:12:19,197 | DEBUG    | _make_request             |    Payload: {
+  "question": "vendor count"
+}
+2025-09-17 16:12:19,204 | DEBUG    | _make_request             |    Response: 200 in 0.01s
+2025-09-17 16:12:20,121 | DEBUG    | _make_request             |    Response: 200 in 0.95s
+2025-09-17 16:12:20,165 | DEBUG    | _make_request             |    Response: 200 in 0.98s
+2025-09-17 16:12:22,052 | DEBUG    | _make_request             |    Response: 200 in 2.88s
+2025-09-17 16:12:22,096 | DEBUG    | _make_request             |    Response: 200 in 2.90s
+2025-09-17 16:12:22,099 | INFO     | test_concurrent_requests  |    📊 Results:
+2025-09-17 16:12:22,099 | INFO     | test_concurrent_requests  |       Success rate: 10/10
+2025-09-17 16:12:22,099 | INFO     | test_concurrent_requests  |       Total time: 2.93s
+2025-09-17 16:12:22,099 | INFO     | test_concurrent_requests  |       Throughput: 3.4 req/s
+2025-09-17 16:12:22,099 | INFO     | test_concurrent_requests  |       Avg response: 0.78s
+2025-09-17 16:12:22,101 | INFO     | _save_results             | 
+📁 Results saved to api_test_logs/api_results_20250917_161201.json
+2025-09-17 16:12:22,101 | INFO     | _print_summary            | 
+======================================================================
+2025-09-17 16:12:22,101 | INFO     | _print_summary            | TEST SUMMARY
+2025-09-17 16:12:22,101 | INFO     | _print_summary            | ======================================================================
+2025-09-17 16:12:22,101 | INFO     | _print_summary            | 
+📊 API Statistics:
+2025-09-17 16:12:22,101 | INFO     | _print_summary            |    Total Requests: 41
+2025-09-17 16:12:22,101 | INFO     | _print_summary            |    Total Time: 24.66s
+2025-09-17 16:12:22,102 | INFO     | _print_summary            |    Average Time: 0.60s
+2025-09-17 16:12:22,102 | INFO     | _print_summary            | 
+🚀 Optimization Results:
+2025-09-17 16:12:22,102 | INFO     | _print_summary            |    Smart Routing: 2/2 queries bypassed LLM
+2025-09-17 16:12:22,102 | INFO     | _print_summary            |    Cache: ✅ Working (98.8% speedup)
+2025-09-17 16:12:22,102 | INFO     | _print_summary            |    VendorResolver: 0/4 names resolved
+2025-09-17 16:12:22,102 | INFO     | print_summary             | 
+======================================================================
+2025-09-17 16:12:22,102 | INFO     | print_summary             | PERFORMANCE SUMMARY
+2025-09-17 16:12:22,102 | INFO     | print_summary             | ======================================================================
+2025-09-17 16:12:22,103 | INFO     | print_summary             | 
+📊 /ask:
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Requests: 6
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Mean: 0.18s
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Median: 0.18s
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Min/Max: 0.00s / 0.47s
+2025-09-17 16:12:22,103 | INFO     | print_summary             | 
+📊 /resolve-vendor/DELL COMPUTER CORP:
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,103 | INFO     | print_summary             |    Mean: 1.26s
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Median: 1.26s
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Min/Max: 1.26s / 1.26s
+2025-09-17 16:12:22,104 | INFO     | print_summary             | 
+📊 /resolve-vendor/Microsft:
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Mean: 1.28s
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Median: 1.28s
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Min/Max: 1.28s / 1.28s
+2025-09-17 16:12:22,104 | INFO     | print_summary             | 
+📊 /resolve-vendor/IBM CORPORATION:
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,104 | INFO     | print_summary             |    Mean: 1.55s
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Median: 1.55s
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Min/Max: 1.55s / 1.55s
+2025-09-17 16:12:22,105 | INFO     | print_summary             | 
+📊 /resolve-vendor/AMAZN:
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Mean: 1.46s
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Median: 1.46s
+2025-09-17 16:12:22,105 | INFO     | print_summary             |    Min/Max: 1.46s / 1.46s
+2025-09-17 16:12:22,106 | INFO     | print_summary             | 
+📊 /ask-advanced:
+2025-09-17 16:12:22,106 | INFO     | print_summary             |    Requests: 3
+2025-09-17 16:12:22,106 | INFO     | print_summary             |    Mean: 0.16s
+2025-09-17 16:12:22,106 | INFO     | print_summary             |    Median: 0.19s
+2025-09-17 16:12:22,106 | INFO     | print_summary             |    Min/Max: 0.10s / 0.19s
+2025-09-17 16:12:22,106 | INFO     | print_summary             | 
+📊 /health:
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Mean: 0.12s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Median: 0.12s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Min/Max: 0.12s / 0.12s
+2025-09-17 16:12:22,107 | INFO     | print_summary             | 
+📊 /dashboard:
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Mean: 0.56s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Median: 0.56s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Min/Max: 0.56s / 0.56s
+2025-09-17 16:12:22,107 | INFO     | print_summary             | 
+📊 /top-vendors:
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Mean: 0.34s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Median: 0.34s
+2025-09-17 16:12:22,107 | INFO     | print_summary             |    Min/Max: 0.34s / 0.34s
+2025-09-17 16:12:22,108 | INFO     | print_summary             | 
+📊 /insights:
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Mean: 0.43s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Median: 0.43s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Min/Max: 0.43s / 0.43s
+2025-09-17 16:12:22,108 | INFO     | print_summary             | 
+📊 /compare:
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Mean: 0.22s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Median: 0.22s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Min/Max: 0.22s / 0.22s
+2025-09-17 16:12:22,108 | INFO     | print_summary             | 
+📊 /statistics/mean:
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Mean: 0.35s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Median: 0.35s
+2025-09-17 16:12:22,108 | INFO     | print_summary             |    Min/Max: 0.35s / 0.35s
+2025-09-17 16:12:22,109 | INFO     | print_summary             | 
+📊 /statistics/median:
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Mean: 0.35s
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Median: 0.35s
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Min/Max: 0.35s / 0.35s
+2025-09-17 16:12:22,109 | INFO     | print_summary             | 
+📊 /statistics/stddev:
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Mean: 0.45s
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Median: 0.45s
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Min/Max: 0.45s / 0.45s
+2025-09-17 16:12:22,109 | INFO     | print_summary             | 
+📊 /statistics/all:
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,109 | INFO     | print_summary             |    Mean: 0.39s
+2025-09-17 16:12:22,110 | INFO     | print_summary             |    Median: 0.39s
+2025-09-17 16:12:22,110 | INFO     | print_summary             |    Min/Max: 0.39s / 0.39s
+2025-09-17 16:12:22,110 | INFO     | print_summary             | 
+📊 /vendor/DELL:
+2025-09-17 16:12:22,110 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,111 | INFO     | print_summary             |    Mean: 0.22s
+2025-09-17 16:12:22,111 | INFO     | print_summary             |    Median: 0.22s
+2025-09-17 16:12:22,111 | INFO     | print_summary             |    Min/Max: 0.22s / 0.22s
+2025-09-17 16:12:22,111 | INFO     | print_summary             | 
+📊 /vendor/IBM:
+2025-09-17 16:12:22,111 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Mean: 0.11s
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Median: 0.11s
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Min/Max: 0.11s / 0.11s
+2025-09-17 16:12:22,112 | INFO     | print_summary             | 
+📊 /vendor/MICROSOFT:
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Mean: 0.54s
+2025-09-17 16:12:22,112 | INFO     | print_summary             |    Median: 0.54s
+2025-09-17 16:12:22,113 | INFO     | print_summary             |    Min/Max: 0.54s / 0.54s
+2025-09-17 16:12:22,113 | INFO     | print_summary             | 
+📊 /vendor/InvalidVendor123:
+2025-09-17 16:12:22,114 | INFO     | print_summary             |    Requests: 1
+2025-09-17 16:12:22,114 | INFO     | print_summary             |    Mean: 1.01s
+2025-09-17 16:12:22,114 | INFO     | print_summary             |    Median: 1.01s
+2025-09-17 16:12:22,114 | INFO     | print_summary             |    Min/Max: 1.01s / 1.01s
+2025-09-17 16:12:22,135 | INFO     | save_metrics              | 📊 Performance metrics saved to api_test_logs/api_performance_20250917_161201.csv
+2025-09-17 16:12:22,136 | INFO     | main                      | 
+======================================================================
+2025-09-17 16:12:22,136 | INFO     | main                      | TEST RUN COMPLETED
+2025-09-17 16:12:22,136 | INFO     | main                      | Check api_test_logs/api_test_20250917_161201.log for detailed logs
+2025-09-17 16:12:22,136 | INFO     | main                      | Check api_test_logs/api_results_20250917_161201.json for test results
+2025-09-17 16:12:22,136 | INFO     | main                      | Check api_test_logs/api_performance_20250917_161201.csv for performance metrics
+2025-09-17 16:12:22,136 | INFO     | main                      | ======================================================================

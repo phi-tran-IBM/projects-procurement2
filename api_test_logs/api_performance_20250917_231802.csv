@@ -1,0 +1,23 @@
+timestamp,endpoint,method,response_time,status_code,test_name,notes
+2025-09-17T23:18:09.450321,/ask-advanced,POST,6.517568111419678,200,template_extraction,Recommendation template test
+2025-09-17T23:18:10.922875,/ask-advanced,POST,1.4717152118682861,200,template_extraction,Comparison template test
+2025-09-17T23:18:12.329348,/ask-advanced,POST,1.405993938446045,200,template_extraction,Statistical template test
+2025-09-17T23:18:14.832510,/ask,POST,2.502362012863159,200,template_performance,without_templates
+2025-09-17T23:18:14.837089,/ask,POST,0.004086017608642578,200,template_performance,with_templates
+2025-09-17T23:18:14.975059,/ask,POST,0.13676810264587402,200,smart_routing,Simple aggregation - should bypass LLM
+2025-09-17T23:18:15.087967,/ask,POST,0.11232805252075195,200,smart_routing,Simple calculation - should bypass LLM
+2025-09-17T23:18:15.362248,/ask,POST,0.2736968994140625,200,smart_routing,Simple count - should bypass LLM
+2025-09-17T23:18:16.410720,/resolve-vendor/DELL COMPUTER CORP,GET,0.8959610462188721,200,vendor_resolver,Should resolve to DELL
+2025-09-17T23:18:17.306494,/resolve-vendor/Microsft,GET,0.8953399658203125,200,vendor_resolver,Should handle typo -> Microsoft
+2025-09-17T23:18:18.264711,/resolve-vendor/IBM CORPORATION,GET,0.957730770111084,200,vendor_resolver,Should resolve to IBM
+2025-09-17T23:18:19.199647,/resolve-vendor/AMAZN,GET,0.9343991279602051,200,vendor_resolver,Should handle partial name
+2025-09-17T23:18:22.718471,/ask-advanced,POST,1.9314329624176025,200,unified_analysis,Compare Dell and IBM and recom
+2025-09-17T23:18:25.926124,/ask-advanced,POST,3.206216812133789,200,unified_analysis,Which vendors should we drop b
+2025-09-17T23:18:27.655214,/ask-advanced,POST,1.7258780002593994,200,unified_analysis,Analyze spending patterns and 
+2025-09-17T23:18:27.741654,/health,GET,0.08535337448120117,200,endpoint_test,Health check
+2025-09-17T23:18:33.106418,/dashboard,GET,5.364164113998413,200,endpoint_test,Dashboard data
+2025-09-17T23:18:33.383604,/top-vendors,GET,0.27670812606811523,200,endpoint_test,Top vendors
+2025-09-17T23:18:33.388267,/ask,POST,0.0038220882415771484,200,endpoint_test,Basic query
+2025-09-17T23:18:36.098280,/insights,POST,2.7087690830230713,200,endpoint_test,Vendor insights
+2025-09-17T23:18:40.691924,/compare,POST,4.592684030532837,200,endpoint_test,Vendor comparison
+2025-09-17T23:18:54.137280,/report,POST,13.444087982177734,200,report_generation,executive_report

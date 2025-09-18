@@ -1,0 +1,89 @@
+{
+  "timestamp": "2025-09-17T23:23:26.391328",
+  "tests": {
+    "vendor_resolver": {
+      "working": true,
+      "cases": [
+        {
+          "input": "DELL",
+          "canonical": "DELL INC",
+          "resolved_count": 1,
+          "success": true
+        },
+        {
+          "input": "DELL INC",
+          "canonical": "DELL INC",
+          "resolved_count": 1,
+          "success": true
+        },
+        {
+          "input": "DELL COMPUTER CORP",
+          "canonical": null,
+          "resolved_count": 0,
+          "success": false
+        },
+        {
+          "input": "MICROSFT",
+          "canonical": null,
+          "resolved_count": 0,
+          "success": false
+        }
+      ]
+    },
+    "unified_analysis": {
+      "working": false,
+      "checks": {
+        "has_query_analysis": true,
+        "has_answer": false,
+        "has_optimization_path": true,
+        "answer_not_empty": false,
+        "template_parsing_enabled": true,
+        "is_complex": false
+      },
+      "answer_length": 0,
+      "response_time": 3.315335
+    },
+    "template_extraction": {
+      "working": false,
+      "checks": {
+        "has_answer": false,
+        "answer_length": 0,
+        "has_recommendations": false,
+        "has_template_tags": false,
+        "has_xml_tags": false,
+        "template_parsing_flag": true,
+        "llm_enhanced": false
+      }
+    },
+    "smart_routing": {
+      "working": true,
+      "cases": [
+        {
+          "query": "total spending",
+          "llm_bypassed": true,
+          "response_time": 0.13412904739379883,
+          "success": true
+        },
+        {
+          "query": "how many vendors",
+          "llm_bypassed": true,
+          "response_time": 0.19727325439453125,
+          "success": true
+        },
+        {
+          "query": "average order value",
+          "llm_bypassed": true,
+          "response_time": 0.12040400505065918,
+          "success": true
+        }
+      ]
+    },
+    "cache": {
+      "working": true,
+      "first_time": 0.11831808090209961,
+      "second_time": 0.003749847412109375,
+      "cache_hit": true,
+      "speedup_percent": 96.830706360753
+    }
+  }
+}

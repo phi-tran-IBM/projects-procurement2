@@ -1,0 +1,7 @@
+test,status,elapsed_time,timestamp,notes
+Smart Routing,WARNING,7.157456159591675,2025-09-17T16:01:19.130317,LLM bypassed: False
+VendorResolver,SKIPPED,0.0014469623565673828,2025-09-17T16:01:19.636684,VendorResolver not enabled
+Unified Analysis,SUCCESS,4.571069717407227,2025-09-17T16:01:24.711478,Optimized to -1 LLM calls
+Grounded Prompts,SUCCESS,0.4765801429748535,2025-09-17T16:01:25.693219,Generated 1 insights
+Cache Performance,WARNING,5.862630128860474,2025-09-17T16:01:32.061072,Cache may not be working optimally
+Comprehensive Query Testing,SUCCESS,10.72990083694458,2025-09-17T16:01:43.295369,Tested 5 queries

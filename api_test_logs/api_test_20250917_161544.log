@@ -1,0 +1,22 @@
+2025-09-17 16:15:44,728 | INFO     | main                      | Test Run ID: 20250917_161544
+2025-09-17 16:15:44,728 | INFO     | main                      | Log File: api_test_logs/api_test_20250917_161544.log
+2025-09-17 16:15:44,728 | INFO     | main                      | Results: api_test_logs/api_results_20250917_161544.json
+2025-09-17 16:15:44,729 | INFO     | main                      | API URL: http://localhost:8080
+2025-09-17 16:15:44,729 | INFO     | run_all_tests             | 
+======================================================================
+2025-09-17 16:15:44,729 | INFO     | run_all_tests             | API TEST SUITE - Testing http://localhost:8080
+2025-09-17 16:15:44,729 | INFO     | run_all_tests             | ======================================================================
+2025-09-17 16:15:44,729 | INFO     | check_api_health          | 
+🔍 Checking API Health...
+2025-09-17 16:15:44,729 | DEBUG    | _make_request             | 🌐 GET http://localhost:8080/health
+2025-09-17 16:15:44,732 | ERROR    | _make_request             |    ❌ Connection error: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /health (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x11dfdecf0>: Failed to establish a new connection: [Errno 61] Connection refused'))
+2025-09-17 16:15:44,732 | ERROR    | check_api_health          |    ❌ API is not responding
+2025-09-17 16:15:44,732 | ERROR    | check_api_health          |    Please ensure the API is running at http://localhost:8080
+2025-09-17 16:15:44,732 | ERROR    | run_all_tests             | Cannot proceed - API is not available
+2025-09-17 16:15:44,732 | INFO     | main                      | 
+======================================================================
+2025-09-17 16:15:44,732 | INFO     | main                      | TEST RUN COMPLETED
+2025-09-17 16:15:44,732 | INFO     | main                      | Check api_test_logs/api_test_20250917_161544.log for detailed logs
+2025-09-17 16:15:44,732 | INFO     | main                      | Check api_test_logs/api_results_20250917_161544.json for test results
+2025-09-17 16:15:44,732 | INFO     | main                      | Check api_test_logs/api_performance_20250917_161544.csv for performance metrics
+2025-09-17 16:15:44,732 | INFO     | main                      | ======================================================================

@@ -1,0 +1,109 @@
+{
+  "smart_routing": {
+    "status": "WARNING",
+    "llm_bypassed": false,
+    "response_time": 7.157249689102173,
+    "answer_preview": "### Total Procurement Analysis\n\n**Total Spending:** $3,081,223,958.72\n**Total Records:** 225,466\n**Average per Record:** $13,666.02"
+  },
+  "unified_analysis": {
+    "query_complex": false,
+    "unified_used": false,
+    "llm_calls": -1,
+    "response_time": 4.569960117340088,
+    "answer_length": 1897
+  },
+  "grounded_prompts": {
+    "vendor_insights_count": 1,
+    "spending_insights_count": 2,
+    "contains_data": true,
+    "sample_insight": "Top vendor REPUBLIC SERVICES INC accounts for $215,791,071.30"
+  },
+  "cache": {
+    "first_call_time": 3.7025508880615234,
+    "second_call_time": 2.1589629650115967,
+    "cache_hit_second": false,
+    "speedup_percent": 41.68985031446994,
+    "cache_stats": {
+      "default": {
+        "hits": 0,
+        "misses": 0,
+        "evictions": 0,
+        "expirations": 0,
+        "total_requests": 0,
+        "cache_type": "default",
+        "created_at": "2025-09-17 16:01:32.060878",
+        "hit_rate": 0.0,
+        "miss_rate": 0.0,
+        "current_size": 0,
+        "max_size": 100,
+        "utilization": 0.0,
+        "ttl": 3600
+      },
+      "_aggregate": {
+        "total_hits": 0,
+        "total_misses": 0,
+        "total_requests": 0,
+        "overall_hit_rate": 0,
+        "cache_count": 1,
+        "total_entries": 0
+      }
+    }
+  },
+  "comprehensive": [
+    {
+      "category": "smart_routing",
+      "query": "total spending",
+      "response_time": 1.8137779235839844,
+      "source": "SQL",
+      "confidence": 100,
+      "llm_bypassed": false,
+      "cache_hit": false,
+      "has_answer": true,
+      "answer_length": 131
+    },
+    {
+      "category": "smart_routing",
+      "query": "average order value",
+      "response_time": 3.2257258892059326,
+      "source": "SQL",
+      "confidence": 95,
+      "llm_bypassed": false,
+      "cache_hit": false,
+      "has_answer": true,
+      "answer_length": 130
+    },
+    {
+      "category": "vendor_resolver",
+      "query": "spending with DELL COMPUTER CORP",
+      "response_time": 1.3892898559570312,
+      "source": "Semantic Search Required",
+      "confidence": 40,
+      "llm_bypassed": false,
+      "cache_hit": false,
+      "has_answer": true,
+      "answer_length": 235
+    },
+    {
+      "category": "vendor_resolver",
+      "query": "compare Microsft and IBM",
+      "response_time": 2.3845250606536865,
+      "source": "SQL",
+      "confidence": 100,
+      "llm_bypassed": false,
+      "cache_hit": false,
+      "has_answer": true,
+      "answer_length": 1051
+    },
+    {
+      "category": "unified_analysis",
+      "query": "Which vendors should we drop based on low performance?",
+      "response_time": 1.9142470359802246,
+      "source": "Recommendation Engine",
+      "confidence": 85,
+      "llm_bypassed": false,
+      "cache_hit": false,
+      "has_answer": true,
+      "answer_length": 29
+    }
+  ]
+}

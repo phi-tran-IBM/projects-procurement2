@@ -1,0 +1,13 @@
+2025-09-17 16:54:14,446 | INFO     | revise_test     | Starting API Test Suite for http://localhost:8080
+2025-09-17 16:54:14,447 | INFO     | revise_test     | ---  Health Check ---
+2025-09-17 16:54:14,771 | INFO     | revise_test     |   - API Health: ✅ OK
+2025-09-17 16:54:14,771 | INFO     | revise_test     | --- 🎯 Testing Problem Areas ---
+2025-09-17 16:54:14,771 | INFO     | revise_test     |   - Testing Smart Routing...
+2025-09-17 16:54:14,891 | INFO     | revise_test     |     - Result: PASSED   | Time: 0.12 s | Notes: LLM correctly bypassed.
+2025-09-17 16:54:14,892 | INFO     | revise_test     |   - Testing Vendor Resolver...
+2025-09-17 16:54:20,024 | INFO     | revise_test     |     - Result: PASSED   | Time: 5.13 s | Notes: Successfully resolved DELL.
+2025-09-17 16:54:20,024 | INFO     | revise_test     |   - Testing Cache Performance...
+2025-09-17 16:54:27,614 | INFO     | revise_test     |     - Result: INFO     | Time: 7.59 s | Notes: Populating cache.
+2025-09-17 16:54:27,618 | INFO     | revise_test     |     - Result: PASSED   | Time: 0.00 s | Notes: Cache hit with 99.95% speedup.
+2025-09-17 16:54:27,618 | INFO     | revise_test     | --- 🧠 Testing Complex Query Navigation ---
+2025-09-17 16:54:27,618 | INFO     | revise_test     |   - Testing: Multi-Step Query...

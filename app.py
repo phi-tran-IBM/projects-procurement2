@@ -20,16 +20,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Import all helper functions (now with template support)
 from app_helpers import (
-    # Template extraction
-    extract_text_from_response,
-    extract_from_template_response,
-    # Dashboard functions
-    get_dashboard_summary, get_trend_data, generate_alerts,
-    generate_dashboard_recommendations, generate_executive_summary,
-    # Report functions
-    generate_report_section, generate_report_conclusions,
-    generate_report_recommendations, generate_report_visualizations,
-    # Insight functions (now grounded)
+    resolve_vendor_name_safe,
+    get_vendor_comprehensive_data,
+    analyze_vendor_comprehensive,
+    generate_vendor_insights,
+    generate_spending_insights,
+    generate_efficiency_insights,
+    enhance_insights_with_llm,
+    generate_vendor_analysis,
+    assess_vendor_risk,
+    identify_vendor_opportunities
+)
     generate_vendor_insights, generate_spending_insights,
     generate_efficiency_insights,
     # Vendor functions (now using VendorResolver)
@@ -932,6 +933,500 @@ def root():
             "performance": "/performance"
         }
     })
+
+
+# ============================================
+# MISSING ENDPOINTS - Added to fix test failures
+# ============================================
+
+@app.route('/status', methods=['GET'])
+def status():
+    """
+    Status endpoint for system health monitoring.
+    """
+    try:
+        # Check database connection
+        with db_manager.get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM procurement").fetchone()[0]
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "database": {
+                "connected": True,
+                "records": count
+            },
+            "components": {
+                "llm_available": LLM_DECOMPOSER_AVAILABLE,
+                "rag_available": ENHANCED_RAG_AVAILABLE,
+                "cache_available": CACHE_AVAILABLE
+            }
+        })
+    except Exception as e:
+        logger.error(f"Status check failed: {e}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 503
+
+@app.route('/query', methods=['POST'])
+def query():
+    """
+    Main query endpoint that the test suite expects.
+    Maps to the existing /ask endpoint functionality.
+    """
+    try:
+        data = request.json
+        if not data or 'question' not in data:
+            return jsonify({"error": "Missing 'question' in request"}), 400
+        
+        question = data.get('question', '')
+        search_type = data.get('search_type', 'auto')
+        max_results = data.get('max_results', 10)
+        
+        # Use existing ask functionality
+        result = answer_question_intelligent(question, mode=search_type)
+        
+        # Extract template content if present
+        if 'answer' in result:
+            result['answer'] = extract_text_from_response(result['answer'])
+        
+        # Add query-specific metadata
+        result.update({
+            'question': question,
+            'search_type': search_type,
+            'max_results': max_results,
+            'endpoint': '/query'
+        })
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error in /query endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/analyze_vendor', methods=['POST'])
+def analyze_vendor():
+    """
+    Analyze a specific vendor with generic vendor name extraction
+    Uses VendorResolver for intelligent matching of any vendor
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        vendor = data.get('vendor') or data.get('query', '')
+        
+        if not vendor:
+            return jsonify({"error": "No vendor specified"}), 400
+        
+        original_query = vendor
+        extracted_vendor = None
+        
+        # Generic vendor name extraction from natural language queries
+        if 'query' in data:
+            query_text = data['query']
+            
+            # Method 1: Extract potential company names using patterns
+            import re
+            
+            # Common company name patterns
+            company_patterns = [
+                r'\b([A-Z][A-Za-z\s]*(?:Inc|Corp|Corporation|LLC|Ltd|Limited|Company|Co|Systems|Technologies|Services|Solutions|Group|International|America)\b)',
+                r'\b([A-Z]{2,}(?:\s+[A-Z]{2,})*)',  # Multiple uppercase words
+                r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:Inc|Corp|LLC|Ltd))?)\b'  # Title case companies
+            ]
+            
+            candidates = set()
+            for pattern in company_patterns:
+                matches = re.findall(pattern, query_text)
+                candidates.update(match.strip() for match in matches if len(match.strip()) > 2)
+            
+            # Method 2: Use VendorResolver to test candidates
+            try:
+                from hybrid_rag_architecture import get_vendor_resolver
+                resolver = get_vendor_resolver()
+                
+                if resolver and candidates:
+                    best_match = None
+                    best_score = 0
+                    
+                    for candidate in candidates:
+                        resolved = resolver.resolve(candidate, max_results=1)
+                        if resolved:
+                            # Use first resolved match
+                            best_match = candidate
+                            break
+                    
+                    if best_match:
+                        extracted_vendor = best_match
+                
+                # Method 3: If no candidates found, extract key words and try resolver
+                if not extracted_vendor and resolver:
+                    # Extract meaningful words (skip common words)
+                    skip_words = {'tell', 'me', 'about', 'analyze', 'spending', 'performance', 'the', 'and', 'or', 'a', 'an'}
+                    words = [word.strip('.,!?') for word in query_text.split() 
+                            if len(word) > 2 and word.lower() not in skip_words]
+                    
+                    # Try each word with resolver
+                    for word in words:
+                        resolved = resolver.resolve(word, max_results=1)
+                        if resolved:
+                            extracted_vendor = word
+                            break
+                
+            except Exception as e:
+                logger.warning(f"VendorResolver failed: {e}")
+            
+            # Method 4: Fallback - use original query
+            if not extracted_vendor:
+                extracted_vendor = query_text.strip()
+            
+            vendor = extracted_vendor
+        
+        logger.info(f"Extracted vendor: '{vendor}' from query: '{original_query}'")
+        
+        # Get vendor data using the comprehensive function
+        result = analyze_vendor_comprehensive(vendor)
+        
+        # Handle response with better error messages
+        if result is None:
+            return jsonify({
+                "error": f"No analysis result for vendor '{vendor}'",
+                "vendor": vendor,
+                "original_query": original_query,
+                "found": False,
+                "endpoint": "/analyze_vendor"
+            }), 404
+        
+        if result.get('error') or not result.get('found', True):
+            return jsonify({
+                "error": result.get('error', f"No data found for vendor '{vendor}'"),
+                "vendor": vendor,
+                "original_query": original_query,
+                "found": False,
+                "confidence": result.get('confidence', 0),
+                "endpoint": "/analyze_vendor"
+            }), 404
+        
+        # Build successful response
+        safe_result = {
+            "vendor": result.get('vendor', vendor),
+            "total_spending": result.get('total_spending', 0) or 0,
+            "order_count": result.get('order_count', 0) or 0,
+            "avg_order": result.get('avg_order', 0) or 0,
+            "min_order": result.get('min_order', 0) or 0,
+            "max_order": result.get('max_order', 0) or 0,
+            "confidence": result.get('confidence', 85),
+            "found": True,
+            "original_query": original_query,
+            "extracted_vendor": vendor,
+            "endpoint": '/analyze_vendor'
+        }
+        
+        # Add analysis text
+        if safe_result['total_spending'] > 0:
+            safe_result['analysis'] = f"Vendor: {safe_result['vendor']} - Spending: ${safe_result['total_spending']:,.2f} - Orders: {safe_result['order_count']:,}"
+        else:
+            safe_result['analysis'] = f"Vendor: {safe_result['vendor']} - No spending data available"
+        
+        logger.info(f"Vendor analysis: {safe_result['vendor']} - ${safe_result['total_spending']:,.2f}")
+        return jsonify(safe_result)
+        
+    except Exception as e:
+        logger.error(f"Error in /analyze_vendor: {e}")
+        return jsonify({
+            "error": str(e),
+            "endpoint": "/analyze_vendor"
+        }), 500
+
+@app.route('/recommendations', methods=['POST'])
+def recommendations():
+    """
+    Strategic recommendations endpoint.
+    """
+    try:
+        data = request.json
+        context = data.get('context', 'general')
+        
+        # Use existing recommendation functionality
+        result = get_strategic_recommendations(context)
+        
+        # Extract template content
+        if 'answer' in result:
+            result['answer'] = extract_text_from_response(result['answer'])
+        
+        result['context'] = context
+        result['endpoint'] = '/recommendations'
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error in /recommendations: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/semantic_search', methods=['POST'])
+def semantic_search():
+    """
+    Direct semantic search endpoint.
+    """
+    data = request.json
+    question = data.get('question')
+    force_semantic = data.get('force_semantic', False)
+    
+    if not question:
+        return jsonify({"error": "Missing 'question' in request"}), 400
+    
+    # Use semantic search mode
+    result = answer_question_intelligent(question, mode='semantic')
+    
+    # Extract template content
+    if 'answer' in result:
+        result['answer'] = extract_text_from_response(result['answer'])
+    
+    result.update({
+        'question': question,
+        'force_semantic': force_semantic,
+        'endpoint': '/semantic_search'
+    })
+    
+    return jsonify(result)
+
+@app.route('/decompose', methods=['POST'])
+def decompose():
+    """
+    Query decomposition endpoint.
+    """
+    data = request.json
+    question = data.get('question')
+    
+    if not question:
+        return jsonify({"error": "Missing 'question' in request"}), 400
+    
+    # Get query decomposition
+    decomposition = decompose_query(question)
+    
+    # Extract template content if present
+    if 'components' in decomposition:
+        for component in decomposition['components']:
+            if 'analysis' in component:
+                component['analysis'] = extract_text_from_response(component['analysis'])
+    
+    decomposition['question'] = question
+    decomposition['endpoint'] = '/decompose'
+    
+    return jsonify(decomposition)
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    """
+    General analysis endpoint.
+    """
+    data = request.json
+    question = data.get('question')
+    analysis_type = data.get('analysis_type', 'basic')
+    
+    if not question:
+        return jsonify({"error": "Missing 'question' in request"}), 400
+    
+    # Perform analysis based on type
+    if analysis_type == 'comprehensive':
+        result = answer_question_intelligent(question, mode='hybrid')
+    else:
+        result = answer_question_intelligent(question, mode='sql')
+    
+    # Extract template content
+    if 'answer' in result:
+        result['answer'] = extract_text_from_response(result['answer'])
+    
+    result.update({
+        'question': question,
+        'analysis_type': analysis_type,
+        'endpoint': '/analyze'
+    })
+    
+    return jsonify(result)
+
+@app.route('/info', methods=['GET'])
+def info():
+    """
+    Application information endpoint.
+    """
+    try:
+        # Get database stats
+        db_stats = {}
+        try:
+            with db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM procurement")
+                total_records = cursor.fetchone()[0]
+                
+                cursor.execute(f"SELECT COUNT(DISTINCT {VENDOR_COL}) FROM procurement")
+                unique_vendors = cursor.fetchone()[0]
+                
+                cursor.execute(f"SELECT SUM(CAST({COST_COL} AS FLOAT)) FROM procurement WHERE {COST_COL} IS NOT NULL")
+                total_spending = cursor.fetchone()[0] or 0
+                
+                db_stats = {
+                    "total_records": total_records,
+                    "unique_vendors": unique_vendors,
+                    "total_spending": float(total_spending)
+                }
+        except Exception as e:
+            db_stats = {"error": str(e)}
+        
+        return jsonify({
+            "application": {
+                "name": "Procurement RAG API",
+                "version": "3.1",
+                "status": "running"
+            },
+            "database": db_stats,
+            "components": {
+                "llm_decomposer": LLM_DECOMPOSER_AVAILABLE,
+                "enhanced_rag": ENHANCED_RAG_AVAILABLE,
+                "cache_system": CACHE_AVAILABLE,
+                "cors_support": CORS_AVAILABLE
+            },
+            "features": {
+                "smart_routing": FEATURES.get('smart_routing', False),
+                "unified_analysis": FEATURES.get('unified_analysis', False),
+                "vendor_resolver": FEATURES.get('central_vendor_resolver', False),
+                "grounded_prompts": FEATURES.get('grounded_prompts', False),
+                "granular_caching": FEATURES.get('granular_caching', False),
+                "template_parsing": FEATURES.get('template_parsing', False)
+            },
+            "endpoint": "/info"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in /info: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/components', methods=['GET'])
+def components():
+    """
+    Component status endpoint.
+    """
+    try:
+        component_status = {}
+        
+        # Database component
+        try:
+            with db_manager.get_connection() as conn:
+                count = conn.execute("SELECT COUNT(*) FROM procurement").fetchone()[0]
+            component_status["database"] = {
+                "status": "healthy",
+                "records": count
+            }
+        except Exception as e:
+            component_status["database"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # LLM components
+        component_status["llm_decomposer"] = {
+            "status": "available" if LLM_DECOMPOSER_AVAILABLE else "unavailable"
+        }
+        
+        component_status["enhanced_rag"] = {
+            "status": "available" if ENHANCED_RAG_AVAILABLE else "unavailable"
+        }
+        
+        # Cache component
+        if CACHE_AVAILABLE:
+            try:
+                cache_manager = get_cache_manager()
+                component_status["cache"] = {
+                    "status": "healthy",
+                    "stats": get_cache_stats()
+                }
+            except Exception as e:
+                component_status["cache"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
+        else:
+            component_status["cache"] = {
+                "status": "unavailable"
+            }
+        
+        # VendorResolver component
+        if FEATURES.get('central_vendor_resolver', False):
+            try:
+                resolver = get_vendor_resolver()
+                component_status["vendor_resolver"] = {
+                    "status": "healthy" if resolver else "unavailable"
+                }
+            except Exception as e:
+                component_status["vendor_resolver"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
+        else:
+            component_status["vendor_resolver"] = {
+                "status": "disabled"
+            }
+        
+        return jsonify({
+            "components": component_status,
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": "/components"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in /components: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/db_test', methods=['GET'])
+def db_test():
+    """
+    Database connectivity test endpoint.
+    """
+    try:
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Test basic query
+            cursor.execute("SELECT COUNT(*) as count FROM procurement")
+            count_result = cursor.fetchone()[0]
+            
+            # Test column access
+            cursor.execute(f"SELECT {VENDOR_COL}, {COST_COL} FROM procurement LIMIT 1")
+            sample = cursor.fetchone()
+            
+            # Test aggregation
+            cursor.execute(f"SELECT SUM(CAST({COST_COL} AS FLOAT)) FROM procurement WHERE {COST_COL} IS NOT NULL")
+            sum_result = cursor.fetchone()[0] or 0
+            
+            return jsonify({
+                "status": "healthy",
+                "tests": {
+                    "basic_query": "passed",
+                    "column_access": "passed",
+                    "aggregation": "passed"
+                },
+                "results": {
+                    "total_records": count_result,
+                    "sample_record_exists": sample is not None,
+                    "total_spending": float(sum_result)
+                },
+                "timestamp": datetime.now().isoformat(),
+                "endpoint": "/db_test"
+            })
+            
+    except Exception as e:
+        logger.error(f"Database test failed: {e}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": "/db_test"
+        }), 500
+
 
 # ============================================
 # MAIN ENTRY POINT

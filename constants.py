@@ -13,7 +13,48 @@ DB_PATH = os.getenv("DB_PATH", "data/verification.db")
 # ============================================
 # COLUMN NAMES
 # ============================================
-VENDOR_COL = "VENDOR_NAME_1"
+# OLD: VENDOR_COL = "VENDOR_NAME_1"  # Replaced by dual-column support above
+
+# ============================================
+# DUAL VENDOR COLUMN SUPPORT - PHASE 1 FIX
+# ============================================
+# Updated to support both VENDOR_NAME_1 and VENDOR_NAME_2 columns
+# This fixes the issue where vendors in the second column were being missed
+
+# Original column definitions (updated)
+VENDOR_COL_1 = "VENDOR_NAME_1"
+VENDOR_COL_2 = "VENDOR_NAME_2"  
+VENDOR_COL = VENDOR_COL_1  # Backward compatibility - primary vendor column
+
+# Multi-column query helpers for unified vendor searching
+VENDOR_SEARCH_BOTH = f"({VENDOR_COL_1} LIKE ? OR {VENDOR_COL_2} LIKE ?)"
+VENDOR_EXACT_BOTH = f"({VENDOR_COL_1} = ? OR {VENDOR_COL_2} = ?)"
+
+# Union query template for getting all vendors from both columns
+VENDOR_UNION_QUERY_TEMPLATE = f"""
+SELECT {VENDOR_COL_1} as vendor_name FROM procurement WHERE {VENDOR_COL_1} IS NOT NULL
+UNION
+SELECT {VENDOR_COL_2} as vendor_name FROM procurement WHERE {VENDOR_COL_2} IS NOT NULL
+"""
+
+# Helper function templates (as string constants for now)
+VENDOR_COUNT_BOTH_QUERY = f"""
+SELECT COUNT(DISTINCT vendor_name) as count FROM (
+    SELECT {VENDOR_COL_1} as vendor_name FROM procurement WHERE {VENDOR_COL_1} IS NOT NULL
+    UNION
+    SELECT {VENDOR_COL_2} as vendor_name FROM procurement WHERE {VENDOR_COL_2} IS NOT NULL
+)
+"""
+
+VENDOR_LIST_BOTH_QUERY = f"""
+SELECT DISTINCT vendor_name FROM (
+    SELECT {VENDOR_COL_1} as vendor_name FROM procurement WHERE {VENDOR_COL_1} IS NOT NULL
+    UNION
+    SELECT {VENDOR_COL_2} as vendor_name FROM procurement WHERE {VENDOR_COL_2} IS NOT NULL
+) ORDER BY vendor_name
+"""
+
+
 COST_COL = "ITEM_TOTAL_COST"
 DESC_COL = "ITEM_DESCRIPTION"
 COMMODITY_COL = "COMMODITY_DESCRIPTION"
@@ -22,8 +63,12 @@ DATE_COL = "DATE_COLUMN"  # If exists
 # ============================================
 # DATA SOURCE
 # ============================================
-CSV_PATH = "data/temp_data.csv"
-
+CSV_PATH = "data/Purchase_Orders_and_Contracts.csv"
+# In constants.py
+# OLD: VENDOR_COL = "VENDOR_NAME_1"  # Replaced by dual-column support above
+COST_COL = "ITEM_TOTAL_COST" 
+DESC_COL = "ITEM_DESCRIPTION"
+COMMODITY_COL = "COMMODITY_DESCRIPTION"
 # ============================================
 # CACHE CONFIGURATION
 # ============================================
@@ -423,9 +468,11 @@ DIRECT_SQL_PATTERNS = {
     },
     'vendor_count': {
         'pattern': r'(?i)(how\s+many\s+vendors|count.*vendors|number\s+of\s+vendors|total\s+vendors)',
-        'sql_template': f"SELECT COUNT(DISTINCT {VENDOR_COL}) as count FROM procurement WHERE {VENDOR_COL} IS NOT NULL",
-        'response_template': "Total number of vendors: {value:,.0f}"
+        'sql_template': VENDOR_COUNT_BOTH_QUERY.strip(),
+        'response_template': "Total number of vendors (both columns): {value:,.0f}"
     },
+#
+# This will make the smart routing use the new dual-column vendor counting.
     'order_count': {
         'pattern': r'(?i)(how\s+many\s+orders|count.*orders|number\s+of\s+orders|total\s+orders)',
         'sql_template': f"SELECT COUNT(*) as count FROM procurement",
@@ -512,7 +559,13 @@ VENDOR_FUZZY_THRESHOLDS = {
 
 # Maximum vendors to return per resolution attempt
 VENDOR_RESOLUTION_MAX_RESULTS = 5
-
+# Vendor alias mapping 
+VENDOR_ALIASES = {
+    "IBM": "INTERNATIONAL BUSINESS MACHINES COR",
+    # Add more aliases as discovered
+    "MICROSOFT": "MICROSOFT CORPORATION",  # If this exists in your data
+    "DELL": "DELL INC",  # If this exists in your data
+}
 # Vendor resolution strategies in order of preference
 VENDOR_RESOLUTION_STRATEGIES = [
     'exact_match',
@@ -848,3 +901,47 @@ HEALTH_CHECK_INTERVAL = 30
 DEBUG_MODE = os.getenv("DEBUG", "false").lower() == "true"
 VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "false").lower() == "true"
 PROFILE_QUERIES = os.getenv("PROFILE_QUERIES", "false").lower() == "true"
+
+# ============================================
+# MANUAL UPDATE INSTRUCTIONS - PHASE 1
+# ============================================
+# 
+# TODO: Update DIRECT_SQL_PATTERNS vendor_count manually:
+# 
+# Replace this pattern:
+#     'vendor_count': {
+#         'pattern': r'(?i)(how\s+many\s+vendors|count.*vendors|number\s+of\s+vendors|total\s+vendors)',
+#         'sql_template': f"SELECT COUNT(DISTINCT {VENDOR_COL}) as count FROM procurement WHERE {VENDOR_COL} IS NOT NULL",
+#         'response_template': "Total number of vendors: {value:,.0f}"
+#     },
+#
+# With this updated pattern:
+#     'vendor_count': {
+#         'pattern': r'(?i)(how\s+many\s+vendors|count.*vendors|number\s+of\s+vendors|total\s+vendors)',
+#         'sql_template': VENDOR_COUNT_BOTH_QUERY.strip(),
+#         'response_template': "Total number of vendors (both columns): {value:,.0f}"
+#     },
+#
+# This will make the smart routing use the new dual-column vendor counting.
+#
+
+
+# ============================================
+# VENDORRESOLVER CONFIGURATION (Added by Implementation Script)
+# ============================================
+
+# Vendor resolver feature flag (standardized across all modules)
+VENDOR_RESOLVER_ENABLED = os.getenv("ENABLE_VENDOR_RESOLVER", "true").lower() == "true"
+
+# Vendor resolution threshold (centralized configuration)
+VENDOR_RESOLUTION_THRESHOLD = float(os.getenv("VENDOR_RESOLUTION_THRESHOLD", "0.8"))
+
+# Additional vendor resolver settings
+VENDOR_RESOLVER_CACHE_SIZE = int(os.getenv("VENDOR_RESOLVER_CACHE_SIZE", "1000"))
+VENDOR_RESOLVER_LOG_LEVEL = os.getenv("VENDOR_RESOLVER_LOG_LEVEL", "INFO")
+
+# Update FEATURES dict to include vendor resolver
+FEATURES.update({
+    'vendor_resolver': VENDOR_RESOLVER_ENABLED,
+    'vendor_resolution_threshold': VENDOR_RESOLUTION_THRESHOLD
+})

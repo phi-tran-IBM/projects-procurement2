@@ -1,0 +1,246 @@
+{
+  "template_parsing": {
+    "template_extraction": [
+      {
+        "question": "Which vendors should we drop for cost optimization?",
+        "response_time": 6.517568111419678,
+        "template_extracted": false,
+        "template_parsing_enabled": false,
+        "has_clean_answer": false,
+        "answer_has_tags": false
+      },
+      {
+        "question": "Compare Dell and IBM spending",
+        "response_time": 1.4717152118682861,
+        "template_extracted": false,
+        "template_parsing_enabled": false,
+        "has_clean_answer": false,
+        "answer_has_tags": false
+      },
+      {
+        "question": "Show me the median order value",
+        "response_time": 1.405993938446045,
+        "template_extracted": false,
+        "template_parsing_enabled": false,
+        "has_clean_answer": false,
+        "answer_has_tags": false
+      }
+    ],
+    "template_performance": {
+      "without_templates_time": 2.502362012863159,
+      "with_templates_time": 0.004086017608642578,
+      "time_difference": 2.4982759952545166,
+      "template_parsing_active": true
+    }
+  },
+  "optimizations": {
+    "smart_routing": [
+      {
+        "query": "total spending",
+        "llm_bypassed": true,
+        "response_time": 0.13676810264587402,
+        "smart_routing_enabled": true,
+        "template_parsing": true
+      },
+      {
+        "query": "average order value",
+        "llm_bypassed": true,
+        "response_time": 0.11232805252075195,
+        "smart_routing_enabled": true,
+        "template_parsing": true
+      },
+      {
+        "query": "how many vendors",
+        "llm_bypassed": true,
+        "response_time": 0.2736968994140625,
+        "smart_routing_enabled": true,
+        "template_parsing": true
+      }
+    ],
+    "vendor_resolver": [
+      {
+        "input": "DELL COMPUTER CORP",
+        "canonical": null,
+        "resolved_vendors": [],
+        "similar_count": 0,
+        "response_time": 0.8959610462188721
+      },
+      {
+        "input": "Microsft",
+        "canonical": null,
+        "resolved_vendors": [],
+        "similar_count": 0,
+        "response_time": 0.8953399658203125
+      },
+      {
+        "input": "IBM CORPORATION",
+        "canonical": null,
+        "resolved_vendors": [],
+        "similar_count": 0,
+        "response_time": 0.957730770111084
+      },
+      {
+        "input": "AMAZN",
+        "canonical": null,
+        "resolved_vendors": [],
+        "similar_count": 0,
+        "response_time": 0.9343991279602051
+      }
+    ],
+    "unified_analysis": [
+      {
+        "query": "Compare Dell and IBM and recommend which one to in",
+        "response_time": 1.9314329624176025,
+        "is_complex": true,
+        "optimization_path": [
+          "Unified Analysis (1 LLM call)",
+          "Template-based Response Generation"
+        ],
+        "has_answer": false,
+        "template_parsing": true,
+        "template_extracted": false
+      },
+      {
+        "query": "Which vendors should we drop based on low performa",
+        "response_time": 3.206216812133789,
+        "is_complex": true,
+        "optimization_path": [
+          "Unified Analysis (1 LLM call)",
+          "Template-based Response Generation"
+        ],
+        "has_answer": false,
+        "template_parsing": true,
+        "template_extracted": false
+      },
+      {
+        "query": "Analyze spending patterns and suggest optimization",
+        "response_time": 1.7258780002593994,
+        "is_complex": true,
+        "optimization_path": [
+          "Unified Analysis (1 LLM call)",
+          "Template-based Response Generation"
+        ],
+        "has_answer": false,
+        "template_parsing": true,
+        "template_extracted": false
+      }
+    ]
+  },
+  "endpoints": {
+    "endpoints": [
+      {
+        "endpoint": "/health",
+        "method": "GET",
+        "status_code": 200,
+        "response_time": 0.08535337448120117,
+        "has_response": true,
+        "description": "Health check",
+        "template_parsing": false,
+        "has_optimizations": false
+      },
+      {
+        "endpoint": "/dashboard",
+        "method": "GET",
+        "status_code": 200,
+        "response_time": 5.364164113998413,
+        "has_response": true,
+        "description": "Dashboard data",
+        "template_parsing": false,
+        "has_optimizations": false
+      },
+      {
+        "endpoint": "/top-vendors",
+        "method": "GET",
+        "status_code": 200,
+        "response_time": 0.27670812606811523,
+        "has_response": true,
+        "description": "Top vendors",
+        "template_parsing": true,
+        "has_optimizations": false
+      },
+      {
+        "endpoint": "/ask",
+        "method": "POST",
+        "status_code": 200,
+        "response_time": 0.0038220882415771484,
+        "has_response": true,
+        "description": "Basic query",
+        "template_parsing": false,
+        "has_optimizations": true
+      },
+      {
+        "endpoint": "/insights",
+        "method": "POST",
+        "status_code": 200,
+        "response_time": 2.7087690830230713,
+        "has_response": true,
+        "description": "Vendor insights",
+        "template_parsing": false,
+        "has_optimizations": true
+      },
+      {
+        "endpoint": "/compare",
+        "method": "POST",
+        "status_code": 200,
+        "response_time": 4.592684030532837,
+        "has_response": true,
+        "description": "Vendor comparison",
+        "template_parsing": true,
+        "has_optimizations": false
+      }
+    ],
+    "report_generation": {
+      "response_time": 13.444087982177734,
+      "status": 200,
+      "has_sections": true,
+      "template_parsing": true,
+      "sections_extracted": [
+        {
+          "section": "conclusions",
+          "has_content": true,
+          "has_template_tags": false
+        },
+        {
+          "section": "executive_summary",
+          "has_content": true,
+          "has_template_tags": false
+        },
+        {
+          "section": "recommendations",
+          "has_content": true,
+          "has_template_tags": false
+        },
+        {
+          "section": "spending",
+          "has_content": true,
+          "has_template_tags": false
+        },
+        {
+          "section": "vendors",
+          "has_content": true,
+          "has_template_tags": false
+        }
+      ]
+    }
+  },
+  "load": {
+    "concurrent": {
+      "total_requests": 10,
+      "successful": 10,
+      "failed": 0,
+      "with_template_parsing": 10,
+      "total_time": 2.2174649238586426,
+      "requests_per_second": 4.509654196738705,
+      "avg_response_time": 0.9682382106781006,
+      "median_response_time": 1.103888988494873,
+      "max_response_time": 1.967343807220459
+    }
+  },
+  "metadata": {
+    "test_run_id": "20250917_231802",
+    "api_url": "http://localhost:8080",
+    "timestamp": "2025-09-17T23:18:56.357352",
+    "total_requests": 36,
+    "total_time": 61.231090784072876
+  }
+}

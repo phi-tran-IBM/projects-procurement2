@@ -16,11 +16,12 @@ from typing import Dict, Any, Optional, List, Tuple, Set
 from functools import lru_cache
 from difflib import SequenceMatcher
 from datetime import datetime
-from template_utils import extract_template_response
+from template_utils import extract_from_template_response
 
 # Import shared modules
 from constants import (
     DB_PATH, VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL,
+    VENDOR_COL_1, VENDOR_COL_2, VENDOR_SEARCH_BOTH, VENDOR_UNION_QUERY_TEMPLATE,
     VENDOR_SUFFIXES, KNOWN_VENDOR_MAPPINGS, 
     STATISTICAL_KEYWORDS, COMPARISON_KEYWORDS, 
     AGGREGATION_KEYWORDS, RANKING_KEYWORDS,
@@ -207,7 +208,7 @@ class VendorResolver:
                  known_mappings: Dict[str, List[str]] = None,
                  cache_enabled: bool = True):
         """
-        Initialize the VendorResolver.
+        Initialize the VendorResolver with proper attribute initialization.
         
         Args:
             db_connection: SQLite database connection
@@ -227,16 +228,34 @@ class VendorResolver:
         else:
             self.cache = None
         
+        # FIXED: Initialize variation_patterns attribute
+        try:
+            from constants import VENDOR_NAME_VARIATIONS
+            self.variation_patterns = [re.compile(pattern, re.IGNORECASE) 
+                                     for pattern in VENDOR_NAME_VARIATIONS]
+        except ImportError:
+            # Fallback patterns if constants not available
+            fallback_patterns = [
+                r'\s+INC\.?$',
+                r'\s+LLC\.?$', 
+                r'\s+CORP(?:ORATION)?\.?$',
+                r'\s+COMPANY$',
+                r'\s+CO\.?$',
+                r'\s+LTD\.?$',
+                r'\s+LIMITED$',
+                r'\s+TECHNOLOGIES$',
+                r'\s+SYSTEMS$',
+                r'\s+SOLUTIONS$',
+                r'\s+SERVICES$',
+                r'\s+INTERNATIONAL$'
+            ]
+            self.variation_patterns = [re.compile(pattern, re.IGNORECASE) 
+                                     for pattern in fallback_patterns]
+        
         # Build vendor lookup tables
         self._build_vendor_tables()
         
-        # Compile regex patterns for vendor variations
-
-        
-        logger.info(f"VendorResolver initialized (cache: {self.cache_enabled})")
-        self.variation_patterns = [re.compile(pattern, re.IGNORECASE) 
-                                for pattern in VENDOR_NAME_VARIATIONS]
-        
+        logger.info(f"VendorResolver initialized (cache: {self.cache_enabled}, patterns: {len(self.variation_patterns)})")
     def _build_vendor_tables(self):
         """Build lookup tables for efficient vendor resolution"""
         self.normalized_to_original = {}
@@ -244,10 +263,17 @@ class VendorResolver:
         
         try:
             # Get all unique vendors from database
-            query = f"SELECT DISTINCT {VENDOR_COL} FROM procurement WHERE {VENDOR_COL} IS NOT NULL"
+            # Use UNION to get vendors from both columns
+            query = f"""
+            SELECT DISTINCT vendor_name FROM (
+                SELECT {VENDOR_COL_1} as vendor_name FROM procurement WHERE {VENDOR_COL_1} IS NOT NULL
+                UNION
+                SELECT {VENDOR_COL_2} as vendor_name FROM procurement WHERE {VENDOR_COL_2} IS NOT NULL
+            )
+            """
             df = pd.read_sql_query(query, self.db_conn)
             
-            for vendor in df[VENDOR_COL]:
+            for vendor in df['vendor_name']:
                 if vendor:
                     # Store original
                     self.vendor_set.add(vendor)
@@ -343,7 +369,7 @@ class VendorResolver:
         return results[0] if results else None
     
     def _normalize_vendor_name(self, vendor: str) -> str:
-        """Normalize vendor name for matching"""
+        """Normalize vendor name for matching with proper variation pattern handling"""
         if not vendor:
             return ""
         
@@ -353,16 +379,24 @@ class VendorResolver:
         normalized = re.sub(r'[^\w\s\-\&]', ' ', normalized)
         
         # Apply variation patterns to remove common suffixes
-        for pattern in self.variation_patterns:
-            normalized = pattern.sub('', normalized)
+        if hasattr(self, 'variation_patterns') and self.variation_patterns:
+            for pattern in self.variation_patterns:
+                normalized = pattern.sub('', normalized)
+        else:
+            # Fallback: remove common suffixes manually
+            for suffix in ['INC', 'LLC', 'CORP', 'CORPORATION', 'COMPANY', 'CO', 'LTD']:
+                normalized = re.sub(r'\b' + suffix + r'\b', '', normalized, flags=re.IGNORECASE)
         
         # Remove extra spaces
         normalized = ' '.join(normalized.split()).strip()
         
         return normalized
-    
+
     def _extract_base_name(self, vendor: str) -> str:
         """Extract the base vendor name (first significant word)"""
+        if not vendor:
+            return ""
+        
         normalized = self._normalize_vendor_name(vendor)
         words = normalized.split()
         
@@ -374,21 +408,19 @@ class VendorResolver:
                 return word
         
         return normalized
-    
+
+
     def _exact_match(self, vendor_input: str) -> List[str]:
-        """Try exact match in database"""
-        vendor_upper = vendor_input.upper().strip()
+        """Exact match strategy"""
+        results = []
+        vendor_upper = vendor_input.upper()
         
-        # Check if exact match exists
-        if vendor_input in self.vendor_set:
-            return [vendor_input]
-        
-        # Check uppercase version
+        # Check exact match (case insensitive)
         for vendor in self.vendor_set:
             if vendor.upper() == vendor_upper:
-                return [vendor]
+                results.append(vendor)
         
-        return []
+        return results
     
     def _known_mappings_match(self, vendor_input: str) -> List[str]:
         """Check against known vendor mappings"""
@@ -402,6 +434,7 @@ class VendorResolver:
                 for vendor in self.vendor_set:
                     if any(alias.upper() in vendor.upper() for alias in aliases):
                         results.append(vendor)
+                        break
         
         return results
     
@@ -426,70 +459,37 @@ class VendorResolver:
         vendor_upper = vendor_input.upper()
         normalized_input = self._normalize_vendor_name(vendor_input)
         
-        # Try different confidence levels
-        for confidence_level in ['high_confidence', 'medium_confidence', 'low_confidence']:
-            threshold = VENDOR_FUZZY_THRESHOLDS.get(confidence_level, 0.8)
+        for vendor in self.vendor_set:
+            vendor_upper_db = vendor.upper()
+            vendor_normalized = self._normalize_vendor_name(vendor)
             
-            for vendor in self.vendor_set:
-                # Try matching against original
-                similarity = SequenceMatcher(None, vendor_upper, vendor.upper()).ratio()
-                if similarity >= threshold:
-                    results.append((vendor, similarity))
-                    continue
-                
-                # Try matching against normalized
-                vendor_normalized = self._normalize_vendor_name(vendor)
-                similarity = SequenceMatcher(None, normalized_input, vendor_normalized).ratio()
-                if similarity >= threshold:
-                    results.append((vendor, similarity))
+            # Calculate similarity scores
+            exact_similarity = SequenceMatcher(None, vendor_upper, vendor_upper_db).ratio()
+            normalized_similarity = SequenceMatcher(None, normalized_input, vendor_normalized).ratio()
             
-            if results:
-                # Sort by similarity and return vendor names only
-                results.sort(key=lambda x: x[1], reverse=True)
-                return [vendor for vendor, _ in results]
+            # Use the higher similarity score
+            similarity = max(exact_similarity, normalized_similarity)
+            
+            if similarity >= VENDOR_FUZZY_THRESHOLDS.get('medium_confidence', 0.8):
+                results.append(vendor)
         
-        return []
+        return results[:VENDOR_RESOLUTION_MAX_RESULTS]
     
     def _partial_match(self, vendor_input: str) -> List[str]:
-        """Last resort - partial string matching"""
+        """Partial matching - last resort"""
         results = []
         vendor_upper = vendor_input.upper()
         
-        # Only use if input is reasonably long
-        if len(vendor_input) < 4:
-            return []
+        # Check if vendor input is contained in any database vendor name
+        for vendor in self.vendor_set:
+            if vendor_upper in vendor.upper() or vendor.upper() in vendor_upper:
+                results.append(vendor)
         
-        try:
-            # Use SQL LIKE query as last resort
-            query = f"""
-            SELECT DISTINCT {VENDOR_COL}
-            FROM procurement
-            WHERE UPPER({VENDOR_COL}) LIKE ?
-            LIMIT 20
-            """
-            
-            # Try different patterns
-            patterns = [
-                f"{vendor_upper}%",      # Starts with
-                f"%{vendor_upper}%",     # Contains
-                f"%{vendor_upper}"       # Ends with
-            ]
-            
-            for pattern in patterns:
-                df = pd.read_sql_query(query, self.db_conn, params=[pattern])
-                if not df.empty:
-                    results.extend(df[VENDOR_COL].tolist())
-                    if results:
-                        break
-            
-        except Exception as e:
-            logger.error(f"Partial match query failed: {e}")
-        
-        return results
+        return results[:VENDOR_RESOLUTION_MAX_RESULTS]
     
     def get_similar_vendors(self, vendor_input: str, threshold: float = 0.6) -> List[Tuple[str, float]]:
         """
-        Get vendors similar to the input with similarity scores.
+        Get similar vendors with similarity scores.
         
         Args:
             vendor_input: The vendor name to find similar matches for
@@ -513,9 +513,19 @@ class VendorResolver:
         
         return similar[:VENDOR_RESOLUTION_MAX_RESULTS]
 
+
+
 # ============================================
-# ENHANCED HYBRID PROCUREMENT RAG
+# PHASE 2: VENDORRESOLVER INTEGRATION
 # ============================================
+
+try:
+    from vendor_resolver import get_vendor_resolver
+    VENDOR_RESOLVER_AVAILABLE = True
+    logger.info("VendorResolver available for hybrid RAG processing")
+except ImportError:
+    VENDOR_RESOLVER_AVAILABLE = False
+    logger.warning("VendorResolver not available for hybrid RAG processing")
 
 class HybridProcurementRAG:
     """Enhanced Hybrid system with LLM-powered intelligence and VendorResolver"""
@@ -535,8 +545,10 @@ class HybridProcurementRAG:
         self.fuzzy_threshold = fuzzy_threshold if fuzzy_threshold else FUZZY_THRESHOLD
         self.use_llm = use_llm and LLM_AVAILABLE
         
-        # Use column mappings from constants
-        self.VENDOR_COL = VENDOR_COL
+        # Use column mappings from constants (updated for dual-vendor support)
+        self.VENDOR_COL = VENDOR_COL  # Backward compatibility
+        self.VENDOR_COL_1 = VENDOR_COL_1
+        self.VENDOR_COL_2 = VENDOR_COL_2
         self.COST_COL = COST_COL
         self.DESC_COL = DESC_COL
         self.COMMODITY_COL = COMMODITY_COL
@@ -623,7 +635,7 @@ class HybridProcurementRAG:
             for vendor in vendors_df[self.VENDOR_COL]:
                 if vendor:
                     normalized = self._normalize_vendor_name(vendor)
-                    base_name = self._extract_base_vendor_name(vendor)
+                    base_name = self._extract_base_name(vendor)
                     
                     # Store mappings
                     if normalized not in vendor_aliases:
@@ -682,6 +694,38 @@ class HybridProcurementRAG:
                 return word
         
         return normalized
+
+        def _resolve_vendor_with_fallback(self, vendor_input: str) -> List[str]:
+        """
+        Resolve vendor using VendorResolver with database fallback
+        """
+        resolved_vendors = []
+        
+        # Try VendorResolver first
+        if VENDOR_RESOLVER_AVAILABLE:
+            try:
+                resolver = get_vendor_resolver()
+                resolved = resolver.get_canonical_name(vendor_input)
+                
+                if resolved and resolved != "UNKNOWN":
+                    # Get all variations
+                    variations = resolver.get_all_variations(resolved)
+                    resolved_vendors.extend(variations)
+                    logger.info(f"VendorResolver found {len(variations)} variations for '{vendor_input}'")
+                
+            except Exception as e:
+                logger.warning(f"VendorResolver failed for '{vendor_input}': {e}")
+        
+        # Fallback to original database logic
+        if not resolved_vendors:
+            resolved_vendors = self._find_vendor_in_db(vendor_input)
+        
+        # Final fallback to input
+        if not resolved_vendors:
+            resolved_vendors = [vendor_input]
+        
+        return resolved_vendors[:5]  # Limit to top 5
+
 
     def _classify_query(self, question: str) -> QueryType:
         """
@@ -998,7 +1042,7 @@ class HybridProcurementRAG:
                 
                 # Extract template content if template parsing is enabled
                 if FEATURES.get('template_parsing', False):
-                    enhanced_answer = extract_template_response(enhanced_answer)
+                    enhanced_answer = extract_from_template_response(enhanced_answer)
             else:
                 # Use original enhancement
                 original_answer = result.get('answer', '')
@@ -1148,7 +1192,7 @@ class HybridProcurementRAG:
                 
                 # Extract template content if needed
                 if FEATURES.get('template_parsing', False):
-                    synthesis = extract_template_response(synthesis)
+                    synthesis = extract_from_template_response(synthesis)
                 
                 final_answer = synthesis
             
@@ -1199,7 +1243,7 @@ class HybridProcurementRAG:
         
         # Extract template content if template parsing is enabled
         if FEATURES.get('template_parsing', False):
-            response = extract_template_response(response)
+            response = extract_from_template_response(response)
         
         return response
 
@@ -1237,16 +1281,19 @@ class HybridProcurementRAG:
         try:
             query = f"""
             SELECT 
-                {self.VENDOR_COL} as vendor,
+                vendor_name as vendor,
                 COUNT(*) as order_count,
                 SUM(CAST({self.COST_COL} AS FLOAT)) as total_spending,
                 AVG(CAST({self.COST_COL} AS FLOAT)) as avg_order,
                 MIN(CAST({self.COST_COL} AS FLOAT)) as min_order,
                 MAX(CAST({self.COST_COL} AS FLOAT)) as max_order
-            FROM procurement
+            FROM (
+                SELECT {self.VENDOR_COL_1} as vendor_name, {self.COST_COL} FROM procurement WHERE {self.VENDOR_COL_1} IS NOT NULL
+                UNION ALL
+                SELECT {self.VENDOR_COL_2} as vendor_name, {self.COST_COL} FROM procurement WHERE {self.VENDOR_COL_2} IS NOT NULL
+            )
             WHERE {self.COST_COL} IS NOT NULL
-            AND {self.VENDOR_COL} IS NOT NULL
-            GROUP BY {self.VENDOR_COL}
+            GROUP BY vendor_name
             ORDER BY total_spending DESC
             LIMIT ?
             """
@@ -1341,6 +1388,284 @@ class HybridProcurementRAG:
         except Exception as e:
             logger.error(f"Statistical query failed: {e}")
             return {"error": str(e), "query": query}
+
+
+    def _handle_specific_lookup(self, question: str) -> Dict[str, Any]:
+        """
+        Handle specific vendor lookup queries
+        Example: "Tell me about Dell spending"
+        """
+        logger.info(f"Handling specific lookup query: {question}")
+        vendors = self._extract_vendor_names(question)
+        
+        if not vendors:
+            return {
+                "source": "Specific Lookup",
+                "query_type": "specific_lookup", 
+                "answer": "No vendor specified in query",
+                "confidence": 0
+            }
+        
+        vendor_name = vendors[0]  # Use first vendor found
+        
+        try:
+            # Use app_helpers function to get comprehensive data
+            from app_helpers import get_vendor_comprehensive_data
+            vendor_data = get_vendor_comprehensive_data(vendor_name)
+            
+            if vendor_data:
+                answer = f"""Vendor Analysis for {vendor_data.get('vendor', vendor_name)}:
+- Total Orders: {vendor_data.get('order_count', 0):,}
+- Total Spending: ${vendor_data.get('total_spending', 0):,.2f}
+- Average Order Value: ${vendor_data.get('avg_order', 0):,.2f}
+- Order Range: ${vendor_data.get('min_order', 0):,.2f} to ${vendor_data.get('max_order', 0):,.2f}"""
+                
+                return {
+                    "source": "Vendor Lookup",
+                    "query_type": "specific_lookup",
+                    "answer": answer,
+                    "vendor_data": vendor_data,
+                    "confidence": 95,
+                    "records_analyzed": vendor_data.get('order_count', 0)
+                }
+            else:
+                return {
+                    "source": "Vendor Lookup", 
+                    "query_type": "specific_lookup",
+                    "answer": f"No data found for vendor '{vendor_name}'. The vendor may not exist in our database or may be listed under a different name.",
+                    "confidence": 0
+                }
+                
+        except Exception as e:
+            logger.error(f"Specific lookup failed: {e}")
+            return {
+                "source": "Vendor Lookup",
+                "query_type": "specific_lookup", 
+                "answer": f"Error retrieving data for '{vendor_name}': {str(e)}",
+                "confidence": 0
+            }
+
+    def _handle_comparison(self, question: str) -> Dict[str, Any]:
+        """
+        Handle vendor comparison queries
+        Example: "Compare Dell and Microsoft spending"
+        """
+        logger.info(f"Handling comparison query: {question}")
+        vendors = self._extract_vendor_names(question)
+        
+        if len(vendors) < 2:
+            return {
+                "source": "Vendor Comparison",
+                "query_type": "comparison",
+                "answer": "Please specify at least two vendors to compare",
+                "confidence": 0
+            }
+        
+        try:
+            # Get data for each vendor
+            from app_helpers import get_vendor_comprehensive_data
+            vendor_data = []
+            
+            for vendor in vendors[:5]:  # Limit to 5 vendors max
+                data = get_vendor_comprehensive_data(vendor)
+                if data:
+                    vendor_data.append(data)
+            
+            if len(vendor_data) < 2:
+                return {
+                    "source": "Vendor Comparison",
+                    "query_type": "comparison", 
+                    "answer": f"Could not find sufficient data to compare the requested vendors. Found data for {len(vendor_data)} vendors.",
+                    "confidence": 20
+                }
+            
+            # Build comparison response
+            answer = "Vendor Spending Comparison:\n\n"
+            
+            # Sort by spending for ranking
+            vendor_data.sort(key=lambda x: x.get('total_spending', 0), reverse=True)
+            
+            for i, data in enumerate(vendor_data, 1):
+                answer += f"{i}. **{data.get('vendor', 'Unknown')}**\n"
+                answer += f"   - Total Spending: ${data.get('total_spending', 0):,.2f}\n"
+                answer += f"   - Orders: {data.get('order_count', 0):,}\n"
+                answer += f"   - Avg Order: ${data.get('avg_order', 0):,.2f}\n\n"
+            
+            # Add insights
+            top_vendor = vendor_data[0]
+            total_spending = sum(v.get('total_spending', 0) for v in vendor_data)
+            top_percentage = (top_vendor.get('total_spending', 0) / total_spending * 100) if total_spending > 0 else 0
+            
+            answer += f"**Key Insights:**\n"
+            answer += f"- {top_vendor.get('vendor')} leads with {top_percentage:.1f}% of combined spending\n"
+            answer += f"- Total combined spending: ${total_spending:,.2f}"
+            
+            return {
+                "source": "Vendor Comparison",
+                "query_type": "comparison",
+                "answer": answer,
+                "vendor_data": vendor_data,
+                "confidence": 90,
+                "vendors_compared": len(vendor_data),
+                "records_analyzed": sum(v.get('order_count', 0) for v in vendor_data)
+            }
+            
+        except Exception as e:
+            logger.error(f"Comparison failed: {e}")
+            return {
+                "source": "Vendor Comparison",
+                "query_type": "comparison",
+                "answer": f"Error comparing vendors: {str(e)}",
+                "confidence": 0
+            }
+
+    def _handle_aggregation(self, question: str) -> Dict[str, Any]:
+        """
+        Handle aggregation queries 
+        Example: "What is total spending?"
+        """
+        logger.info(f"Handling aggregation query: {question}")
+        
+        try:
+            # Use database manager for total spending
+            from database_utils import db_manager
+            stats = db_manager.get_stats()
+            
+            total_spending = stats.get('total_spending', 0)
+            total_orders = stats.get('total_records', 0)
+            unique_vendors = stats.get('unique_vendors', 0)
+            avg_order = stats.get('average_order', 0)
+            
+            answer = f"""Procurement Summary:
+- Total Spending: ${total_spending:,.2f}
+- Total Orders: {total_orders:,}
+- Unique Vendors: {unique_vendors:,}
+- Average Order Value: ${avg_order:,.2f}"""
+            
+            return {
+                "source": "Database Aggregation",
+                "query_type": "aggregation", 
+                "answer": answer,
+                "statistics": stats,
+                "confidence": 100,
+                "records_analyzed": total_orders
+            }
+            
+        except Exception as e:
+            logger.error(f"Aggregation failed: {e}")
+            return {
+                "source": "Database Aggregation",
+                "query_type": "aggregation",
+                "answer": f"Error calculating totals: {str(e)}",
+                "confidence": 0
+            }
+
+    def _handle_ranking(self, question: str) -> Dict[str, Any]:
+        """
+        Handle ranking queries
+        Example: "Who are the top 5 vendors?"
+        """
+        logger.info(f"Handling ranking query: {question}")
+        
+        try:
+            # Get top vendors using dual-column helper
+            from app_helpers import get_vendor_stats_both_columns
+            vendor_stats = get_vendor_stats_both_columns()
+            
+            if not vendor_stats:
+                return {
+                    "source": "Vendor Ranking",
+                    "query_type": "ranking",
+                    "answer": "No vendor data available for ranking",
+                    "confidence": 0
+                }
+            
+            # Take top 10
+            top_vendors = vendor_stats[:10]
+            
+            answer = "Top Vendors by Spending:\n\n"
+            for i, vendor in enumerate(top_vendors, 1):
+                answer += f"{i}. **{vendor.get('vendor_name', 'Unknown')}**\n"
+                answer += f"   - Spending: ${vendor.get('total_spending', 0):,.2f}\n"
+                answer += f"   - Orders: {vendor.get('order_count', 0):,}\n\n"
+            
+            total_top_spending = sum(v.get('total_spending', 0) for v in top_vendors)
+            answer += f"**Combined top {len(top_vendors)} spending: ${total_top_spending:,.2f}**"
+            
+            return {
+                "source": "Vendor Ranking",
+                "query_type": "ranking",
+                "answer": answer,
+                "vendor_data": top_vendors,
+                "confidence": 95,
+                "vendors_ranked": len(top_vendors)
+            }
+            
+        except Exception as e:
+            logger.error(f"Ranking failed: {e}")
+            return {
+                "source": "Vendor Ranking", 
+                "query_type": "ranking",
+                "answer": f"Error generating vendor ranking: {str(e)}",
+                "confidence": 0
+            }
+
+    def _handle_fuzzy_search(self, question: str) -> Dict[str, Any]:
+        """
+        Handle fuzzy search queries
+        Example: "Find vendors like Dell"
+        """
+        logger.info(f"Handling fuzzy search query: {question}")
+        
+        try:
+            vendors = self._extract_vendor_names(question)
+            if not vendors:
+                return {
+                    "source": "Fuzzy Search",
+                    "query_type": "fuzzy_search",
+                    "answer": "No vendor pattern specified for fuzzy search",
+                    "confidence": 0
+                }
+            
+            search_term = vendors[0]
+            
+            # Use VendorResolver for fuzzy matching if available
+            if self.vendor_resolver:
+                matches = self.vendor_resolver.resolve(search_term, max_results=10)
+            else:
+                # Fallback to basic search
+                from app_helpers import search_vendors_both_columns
+                matches = search_vendors_both_columns(search_term, limit=10)
+            
+            if matches:
+                answer = f"Vendors similar to '{search_term}':\n\n"
+                for i, match in enumerate(matches, 1):
+                    answer += f"{i}. {match}\n"
+                
+                return {
+                    "source": "Fuzzy Search",
+                    "query_type": "fuzzy_search", 
+                    "answer": answer,
+                    "matches": matches,
+                    "confidence": 85,
+                    "search_term": search_term
+                }
+            else:
+                return {
+                    "source": "Fuzzy Search",
+                    "query_type": "fuzzy_search",
+                    "answer": f"No vendors found similar to '{search_term}'",
+                    "confidence": 50
+                }
+                
+        except Exception as e:
+            logger.error(f"Fuzzy search failed: {e}")
+            return {
+                "source": "Fuzzy Search",
+                "query_type": "fuzzy_search", 
+                "answer": f"Error in fuzzy search: {str(e)}",
+                "confidence": 0
+            }
 
     def _handle_semantic_search(self, question: str) -> Dict[str, Any]:
         """

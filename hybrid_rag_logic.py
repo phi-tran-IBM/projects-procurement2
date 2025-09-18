@@ -34,7 +34,7 @@ from hybrid_rag_architecture import (
     HybridProcurementRAG, 
     get_vendor_resolver
 )
-from template_utils import extract_template_response
+from template_utils import extract_from_template_response
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -110,7 +110,7 @@ def extract_response_content(response: Any) -> str:
     if isinstance(response, str):
         if FEATURES.get('template_parsing', False):
             # Use template extraction
-            extracted = extract_template_response(response)
+            extracted = extract_from_template_response(response)
             if extracted != response:
                 logger.debug("Extracted template response")
             return extracted

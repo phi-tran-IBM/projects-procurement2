@@ -8,7 +8,10 @@ import pandas as pd
 import logging
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
-from constants import DB_PATH, CSV_PATH, VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL
+from constants import (
+    DB_PATH, CSV_PATH, VENDOR_COL, COST_COL, DESC_COL, COMMODITY_COL,
+    VENDOR_COL_1, VENDOR_COL_2, VENDOR_SEARCH_BOTH, VENDOR_UNION_QUERY_TEMPLATE
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,8 @@ class DatabaseManager:
             
             # Create indexes for performance
             cursor = conn.cursor()
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_vendor ON procurement({VENDOR_COL})")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_vendor1 ON procurement({VENDOR_COL_1})")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_vendor2 ON procurement({VENDOR_COL_2})")
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_cost ON procurement({COST_COL})")
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_commodity ON procurement({COMMODITY_COL})")
             
@@ -79,11 +83,11 @@ class DatabaseManager:
             try:
                 cursor.execute(f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS procurement_fts 
-                USING fts5({VENDOR_COL}, {DESC_COL}, {COMMODITY_COL})
+                USING fts5({VENDOR_COL_1}, {VENDOR_COL_2}, {DESC_COL}, {COMMODITY_COL})
                 """)
                 cursor.execute(f"""
                 INSERT INTO procurement_fts 
-                SELECT {VENDOR_COL}, {DESC_COL}, {COMMODITY_COL} 
+                SELECT {VENDOR_COL_1}, {VENDOR_COL_2}, {DESC_COL}, {COMMODITY_COL} 
                 FROM procurement
                 """)
             except sqlite3.OperationalError:
@@ -144,7 +148,11 @@ class DatabaseManager:
             
             # Unique vendors
             stats['unique_vendors'] = self.execute_scalar(
-                f"SELECT COUNT(DISTINCT {VENDOR_COL}) FROM procurement"
+                f"""SELECT COUNT(DISTINCT vendor_name) FROM (
+                    SELECT {VENDOR_COL_1} as vendor_name FROM procurement WHERE {VENDOR_COL_1} IS NOT NULL
+                    UNION
+                    SELECT {VENDOR_COL_2} as vendor_name FROM procurement WHERE {VENDOR_COL_2} IS NOT NULL
+                )"""
             )
             
             # Total spending
@@ -167,36 +175,46 @@ class DatabaseManager:
         return stats
     
     def vendor_exists(self, vendor_name: str) -> bool:
-        """Check if vendor exists in database"""
+        """Check if vendor exists in database (searches both vendor columns)"""
         count = self.execute_scalar(
-            f"SELECT COUNT(*) FROM procurement WHERE UPPER({VENDOR_COL}) LIKE ?",
-            [f"%{vendor_name.upper()}%"]
+            f"SELECT COUNT(*) FROM procurement WHERE UPPER({VENDOR_COL_1}) LIKE ? OR UPPER({VENDOR_COL_2}) LIKE ?",
+            [f"%{vendor_name.upper()}%", f"%{vendor_name.upper()}%"]
         )
         return count > 0
     
     def get_vendor_list(self, pattern: Optional[str] = None, limit: int = 100) -> List[str]:
-        """Get list of vendors matching pattern"""
+        """Get list of vendors matching pattern (searches both vendor columns)"""
         if pattern:
+            # Use UNION to get vendors from both columns
             query = f"""
-            SELECT DISTINCT {VENDOR_COL} 
-            FROM procurement 
-            WHERE UPPER({VENDOR_COL}) LIKE ?
-            ORDER BY {VENDOR_COL}
-            LIMIT ?
+            SELECT DISTINCT vendor_name FROM (
+                SELECT {VENDOR_COL_1} as vendor_name 
+                FROM procurement 
+                WHERE UPPER({VENDOR_COL_1}) LIKE ? AND {VENDOR_COL_1} IS NOT NULL
+                UNION
+                SELECT {VENDOR_COL_2} as vendor_name 
+                FROM procurement 
+                WHERE UPPER({VENDOR_COL_2}) LIKE ? AND {VENDOR_COL_2} IS NOT NULL
+            ) ORDER BY vendor_name LIMIT ?
             """
-            params = [f"%{pattern.upper()}%", limit]
+            params = [f"%{pattern.upper()}%", f"%{pattern.upper()}%", limit]
         else:
+            # Get all vendors from both columns
             query = f"""
-            SELECT DISTINCT {VENDOR_COL} 
-            FROM procurement 
-            WHERE {VENDOR_COL} IS NOT NULL
-            ORDER BY {VENDOR_COL}
-            LIMIT ?
+            SELECT DISTINCT vendor_name FROM (
+                SELECT {VENDOR_COL_1} as vendor_name 
+                FROM procurement 
+                WHERE {VENDOR_COL_1} IS NOT NULL
+                UNION
+                SELECT {VENDOR_COL_2} as vendor_name 
+                FROM procurement 
+                WHERE {VENDOR_COL_2} IS NOT NULL
+            ) ORDER BY vendor_name LIMIT ?
             """
             params = [limit]
         
         df = self.execute_query(query, params)
-        return df[VENDOR_COL].tolist()
+        return df['vendor_name'].tolist()
     
     def search_full_text(self, search_term: str, limit: int = 20) -> pd.DataFrame:
         """Full-text search if FTS5 is available"""
@@ -218,12 +236,13 @@ class DatabaseManager:
             query = f"""
             SELECT *
             FROM procurement
-            WHERE UPPER({VENDOR_COL}) LIKE ? 
+            WHERE UPPER({VENDOR_COL_1}) LIKE ? 
+               OR UPPER({VENDOR_COL_2}) LIKE ?
                OR UPPER({DESC_COL}) LIKE ?
                OR UPPER({COMMODITY_COL}) LIKE ?
             LIMIT ?
             """
-            return self.execute_query(query, [pattern.upper()] * 3 + [limit])
+            return self.execute_query(query, [pattern.upper()] * 4 + [limit])
 
 # Singleton instance
 db_manager = DatabaseManager()

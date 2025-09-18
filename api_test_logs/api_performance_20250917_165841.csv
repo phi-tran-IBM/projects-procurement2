@@ -1,0 +1,27 @@
+timestamp,endpoint,method,response_time,status_code,test_name,notes
+2025-09-17T16:58:42.195156,/ask,POST,0.12342095375061035,200,smart_routing,Simple aggregation - should bypass LLM
+2025-09-17T16:58:42.308329,/ask,POST,0.11234402656555176,200,smart_routing,Simple calculation - should bypass LLM
+2025-09-17T16:58:42.497624,/ask,POST,0.18862390518188477,200,smart_routing,Simple count - should bypass LLM
+2025-09-17T16:58:42.756821,/resolve-vendor/DELL COMPUTER CORP,GET,0.14996600151062012,200,vendor_resolver,Should resolve to DELL
+2025-09-17T16:58:43.080113,/resolve-vendor/Microsft,GET,0.32273197174072266,200,vendor_resolver,Should handle typo -> Microsoft
+2025-09-17T16:58:43.166179,/resolve-vendor/IBM CORPORATION,GET,0.08534383773803711,200,vendor_resolver,Should resolve to IBM
+2025-09-17T16:58:45.132399,/resolve-vendor/AMAZN,GET,1.9654600620269775,200,vendor_resolver,Should handle partial name
+2025-09-17T16:59:06.422465,/ask,POST,10.642226934432983,200,cache_test,first_call
+2025-09-17T16:59:06.937931,/ask,POST,0.00939488410949707,200,cache_test,second_call
+2025-09-17T16:59:23.941033,/ask-advanced,POST,16.99375891685486,200,unified_analysis,Compare Dell and IBM and recom
+2025-09-17T16:59:44.840578,/ask-advanced,POST,20.898396968841553,200,unified_analysis,Which vendors should we drop b
+2025-09-17T17:00:03.532035,/ask-advanced,POST,18.68858289718628,200,unified_analysis,Analyze spending patterns and 
+2025-09-17T17:00:03.639252,/health,GET,0.10454082489013672,200,endpoint_test,Health check
+2025-09-17T17:00:10.082323,/dashboard,GET,6.442516803741455,200,endpoint_test,Dashboard data
+2025-09-17T17:00:10.381142,/top-vendors,GET,0.2983710765838623,200,endpoint_test,Top vendors
+2025-09-17T17:00:10.385213,/ask,POST,0.003389120101928711,200,endpoint_test,Basic query
+2025-09-17T17:00:12.850152,/insights,POST,2.4641642570495605,200,endpoint_test,Vendor insights
+2025-09-17T17:00:15.351593,/compare,POST,2.5007359981536865,200,endpoint_test,Vendor comparison
+2025-09-17T17:00:17.735260,/statistics/mean,POST,2.382690668106079,200,statistics,mean
+2025-09-17T17:00:20.169749,/statistics/median,POST,2.4322662353515625,200,statistics,median
+2025-09-17T17:00:22.392340,/statistics/stddev,POST,2.220829963684082,200,statistics,stddev
+2025-09-17T17:00:24.791216,/statistics/all,POST,2.3969883918762207,200,statistics,all
+2025-09-17T17:00:28.019887,/vendor/DELL,GET,3.2276017665863037,200,vendor_detail,DELL
+2025-09-17T17:00:31.745103,/vendor/IBM,GET,3.7246828079223633,200,vendor_detail,IBM
+2025-09-17T17:00:35.043508,/vendor/MICROSOFT,GET,3.285810947418213,200,vendor_detail,MICROSOFT
+2025-09-17T17:00:36.493341,/vendor/InvalidVendor123,GET,1.4290366172790527,404,vendor_detail,InvalidVendor123
