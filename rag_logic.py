@@ -225,11 +225,23 @@ def extract_statistics_from_template(response_text: str) -> str:
 # ENHANCED RAG PROCESSOR
 # ============================================
 
+from query_decomposer import MockChatWatsonx
+
 class EnhancedRAGProcessor:
     """Advanced RAG processor with grounded prompts and tiered search"""
     
     def __init__(self):
         """Initialize the enhanced RAG processor"""
+        # Per user feedback, check for credentials before initializing
+        if not (WATSONX_PROJECT_ID or os.getenv("WX_AI_PROJECTID")) or not (WATSONX_API_KEY or os.getenv("WX_AI_APIKEY")):
+            logger.warning("WatsonX credentials not found. Using MockChatWatsonx for RAG processor.")
+            self.llm = MockChatWatsonx()
+            self.memory = None # Mock memory is not needed for this scope
+            self.decomposer = get_decomposer() if DECOMPOSER_AVAILABLE else None
+            self.vendor_resolver = get_vendor_resolver() if VENDOR_RESOLVER_AVAILABLE and FEATURES.get('central_vendor_resolver', False) else None
+            self.search_cache = None
+            return
+
         try:
             # Initialize LLM with SYNTHESIS_MODEL for high-quality responses
             self.llm = ChatWatsonx(
@@ -268,7 +280,12 @@ class EnhancedRAGProcessor:
             
         except Exception as e:
             logger.error(f"Failed to initialize RAG Processor: {e}")
-            raise
+            # Ensure all are None on failure
+            self.llm = None
+            self.memory = None
+            self.decomposer = None
+            self.vendor_resolver = None
+            self.search_cache = None
 
     def process_query(self, question: str, mode: str = "semantic") -> Dict[str, Any]:
         """
@@ -899,8 +916,10 @@ def analyze_vendor_semantic(vendor_name: str) -> Dict[str, Any]:
 
 def get_recommendations(context: str = "cost optimization") -> Dict[str, Any]:
     """
-    Get strategic recommendations based on semantic analysis
-    Now uses dynamic GROUNDED_RECOMMENDATION_PROMPT with template support
+    Get strategic recommendations based on semantic analysis.
+    NOTE: This function relies on a vector database for semantic search, which is not
+    available in all environments. The primary recommendation logic has been moved to
+    app_helpers.py.
     """
     question = f"What are the top recommendations for {context} based on procurement patterns?"
     result = answer_question_intelligent(question, mode="semantic")

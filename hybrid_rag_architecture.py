@@ -1258,13 +1258,160 @@ class HybridProcurementRAG:
             logger.error(f"Failed to get vendor statistics: {e}")
             return []
 
-    # ORIGINAL HANDLERS (kept for compatibility - truncated for space)
-    # [Rest of the handler methods remain the same as the original file]
-    # Including: _safe_float, _safe_int, _handle_comparison, _format_comparison_results_enhanced,
-    # _extract_vendors_with_patterns, _get_vendor_statistics, _get_vendor_variations,
-    # _handle_aggregation, _handle_ranking, _handle_specific_lookup, _get_vendor_commodities,
-    # _handle_statistical, _handle_trend_analysis, _handle_fuzzy_search, _handle_semantic_search,
-    # get_database_stats
+    def _handle_statistical(self, question: str) -> Dict[str, Any]:
+        """
+        Handles statistical queries by fetching data and using helper functions.
+        Example: "What is the median spending for Dell?"
+        """
+        logger.info(f"Handling statistical query: {question}")
+        question_lower = question.lower()
+        vendors = self._extract_vendor_names(question)
+
+        # Determine the statistical function
+        metric = "all"
+        # STATISTICAL_KEYWORDS is from constants.py
+        for keyword in STATISTICAL_KEYWORDS:
+            if keyword in question_lower:
+                metric = keyword
+                break
+
+        # 'average' is a common synonym for 'mean'
+        if 'average' in question_lower:
+            metric = 'mean'
+
+        # Build query
+        query = f"SELECT CAST({self.COST_COL} AS FLOAT) as value FROM procurement"
+        params = []
+        where_clauses = [f"{self.COST_COL} IS NOT NULL"]
+
+        if vendors:
+            # Use VendorResolver if available to get all possible names
+            if self.vendor_resolver:
+                resolved_vendors = []
+                for v_name in vendors:
+                    resolved_vendors.extend(self.vendor_resolver.resolve(v_name))
+                vendors = list(set(resolved_vendors))
+
+            if vendors:
+                placeholders = ','.join(['?' for _ in vendors])
+                where_clauses.append(f"{self.VENDOR_COL} IN ({placeholders})")
+                params.extend(vendors)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            df = safe_execute_query(query, params)
+            if df.empty:
+                return {"answer": "No data found for the specified criteria."}
+
+            values = df['value'].dropna().values
+
+            # MIN_DATA_REQUIREMENTS and INSUFFICIENT_DATA_MESSAGES are from constants.py
+            if len(values) < MIN_DATA_REQUIREMENTS.get('statistical', 10):
+                 return {
+                    "warning": INSUFFICIENT_DATA_MESSAGES['insufficient_samples'].format(
+                        required=MIN_DATA_REQUIREMENTS.get('statistical', 10),
+                        found=len(values)
+                    ),
+                    "answer": "Not enough data to perform a reliable statistical calculation."
+                }
+
+            # This function is defined in app_helpers.py, but we copy it here to avoid circular import
+            stats_result = self._calculate_statistical_metrics(values, metric)
+
+            # Create a user-friendly answer
+            answer = f"Statistical analysis for vendors: {', '.join(vendors) if vendors else 'All Vendors'}\n"
+            if "value" in stats_result:
+                answer += f"The {metric} is: ${stats_result['value']:,.2f}"
+            else:
+                for key, val in stats_result.items():
+                    if key not in ['metric', 'records_analyzed']:
+                        answer += f"- {key.capitalize()}: ${val:,.2f}\n"
+
+            return {
+                "source": "SQL Query + Python Stats",
+                "query_type": "statistical",
+                "answer": answer,
+                "statistics": stats_result,
+                "vendors_analyzed": vendors,
+                "records_analyzed": len(values)
+            }
+
+        except Exception as e:
+            logger.error(f"Statistical query failed: {e}")
+            return {"error": str(e), "query": query}
+
+    def _handle_semantic_search(self, question: str) -> Dict[str, Any]:
+        """
+        Handles semantic search queries using database full-text search as a fallback.
+        """
+        logger.info(f"Handling semantic search (FTS fallback) for: {question}")
+        try:
+            results_df = db_manager.search_full_text(question, limit=10)
+
+            if results_df.empty:
+                return {
+                    "answer": "I could not find any specific data related to your query using full-text search.",
+                    "source": "FTS Fallback"
+                }
+
+            # Format the results
+            records = results_df.to_dict('records')
+            answer = "Found some potentially relevant records:\n"
+            for record in records:
+                answer += f"- Vendor: {record.get(self.VENDOR_COL)}, Cost: {record.get(self.COST_COL)}, Desc: {str(record.get(self.DESC_COL))[:50]}...\n"
+
+            return {
+                "source": "FTS Fallback",
+                "query_type": "semantic_search",
+                "answer": answer,
+                "data": records
+            }
+
+        except Exception as e:
+            logger.error(f"Semantic search (FTS) failed: {e}")
+            return {"error": str(e), "source": "FTS Fallback"}
+
+    def _calculate_statistical_metrics(self, values: np.ndarray, metric: str = "all") -> Dict:
+        """
+        Calculate statistical metrics.
+        Copied from app_helpers.py to avoid circular imports.
+        """
+        if len(values) == 0:
+            return {"error": "No values to analyze"}
+
+        result = {
+            "metric": metric,
+            "records_analyzed": len(values)
+        }
+
+        if metric == "all":
+            result.update({
+                "mean": float(np.mean(values)),
+                "median": float(np.median(values)),
+                "std": float(np.std(values)),
+                "variance": float(np.var(values)),
+                "min": float(np.min(values)),
+                "max": float(np.max(values)),
+                "q25": float(np.percentile(values, 25)),
+                "q75": float(np.percentile(values, 75))
+            })
+        else:
+            stats_map = {
+                "median": np.median,
+                "mean": np.mean,
+                "stddev": np.std,
+                "variance": np.var,
+                "min": np.min,
+                "max": np.max
+            }
+            if metric in stats_map:
+                result["value"] = float(stats_map[metric](values))
+            else:
+                result["error"] = f"Unknown metric: {metric}"
+
+        return result
 
 # ============================================
 # MODULE-LEVEL FUNCTIONS

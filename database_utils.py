@@ -56,6 +56,13 @@ class DatabaseManager:
             df = pd.read_csv(CSV_PATH, low_memory=False)
             logger.info(f"Loaded {len(df)} records from CSV")
             
+            # Clean column names (replace spaces with underscores, etc.)
+            original_columns = df.columns
+            df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace(r'[^a-zA-Z0-9_]', '', regex=True)
+            renamed_columns = {orig: new for orig, new in zip(original_columns, df.columns) if orig != new}
+            if renamed_columns:
+                logger.info(f"Cleaned column names: {renamed_columns}")
+
             # Create database
             conn = sqlite3.connect(self.db_path)
             

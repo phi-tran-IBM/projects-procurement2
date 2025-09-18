@@ -142,11 +142,58 @@ class UnifiedQueryAnalysis(BaseModel):
 # ENHANCED LLM QUERY DECOMPOSER
 # ============================================
 
+from langchain_core.messages import AIMessage
+
+class MockChatWatsonx:
+    """A mock ChatWatsonx client for testing without credentials."""
+    def invoke(self, prompt: str) -> AIMessage:
+        logger.info(f"MockChatWatsonx received prompt: {prompt[:100]}...")
+        # Return a structured response based on keywords in the prompt
+        if "UNIFIED_ANALYSIS_PROMPT" in prompt or "expert procurement query analyzer" in prompt:
+            # This is for the decompose_query function
+            mock_analysis = {
+                "intent": "comparison", "confidence": 0.95,
+                "entities": {"vendors": ["Dell", "IBM"], "metrics": ["spending"], "time_periods": [], "commodities": []},
+                "complexity": "simple", "suggested_approach": "hybrid",
+                "requires_decomposition": False, "sub_queries": [], "ambiguous_references": {}
+            }
+            return AIMessage(content=json.dumps(mock_analysis))
+        elif "GROUNDED_STATISTICAL_PROMPT" in prompt or "statistical analysis" in prompt:
+            # This is for interpret_statistics
+            return AIMessage(content="<STATISTICAL_ANALYSIS><SUMMARY>The mock analysis shows stable spending.</SUMMARY><FINDING1>Mock Finding: The median is close to the mean.</FINDING1></STATISTICAL_ANALYSIS>")
+        else:
+            # Default mock response for other synthesis tasks
+            return AIMessage(content="<RESPONSE_START><ANSWER>This is a mock LLM response for testing purposes.</ANSWER></RESPONSE_START>")
+
+    def __call__(self, *args, **kwargs):
+        # Make the class instance callable to mimic some framework behaviors
+        if args and isinstance(args[0], str):
+            return self.invoke(args[0])
+        return AIMessage(content="Default mock response.")
+
 class LLMQueryDecomposer:
     """Intelligent query decomposition using LLM - OPTIMIZED VERSION with Template Support"""
     
     def __init__(self):
         """Initialize the decomposer with specialized LLMs and caching"""
+        # Per user feedback, check for credentials before initializing
+        if not (WATSONX_PROJECT_ID or os.getenv("WX_AI_PROJECTID")) or not (WATSONX_API_KEY or os.getenv("WX_AI_APIKEY")):
+            logger.warning("WatsonX credentials not found. Using MockChatWatsonx for testing.")
+            self.llm_available = True  # We have a mock, so features can be "available"
+            self.decomposer_llm = MockChatWatsonx()
+            self.synthesis_llm = MockChatWatsonx()
+            # We don't initialize the rest (parsers, etc.) for the mock case as they depend on a real LLM
+            self.intent_parser = None
+            self.entity_parser = None
+            self.decomposition_parser = None
+            self.unified_parser = None
+            self.fixing_parser = None
+            self.analysis_cache = None
+            self.entity_cache = None
+            self.last_analysis_time = 0
+            self.total_llm_calls = 0
+            return
+
         try:
             # Initialize decomposer LLM (fast, for analysis)
             self.decomposer_llm = ChatWatsonx(

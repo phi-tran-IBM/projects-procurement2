@@ -37,7 +37,7 @@ except ImportError:
 # Import core AI functions
 try:
     from hybrid_rag_logic import answer_question_intelligent
-    from query_decomposer import generate_response
+    from query_decomposer import generate_response, get_llm_chain
     LLM_AVAILABLE = True
 except ImportError:
     LLM_AVAILABLE = False
@@ -727,21 +727,44 @@ def interpret_statistics(result: Dict, metric: str) -> str:
     """Interpret statistical results using grounded approach with template support."""
     if "error" in result:
         return result["error"]
-    
-    if LLM_AVAILABLE and FEATURES.get('grounded_prompts', False):
-        # Use dynamic prompt function
-        prompt = get_grounded_statistical_prompt().format(
-            statistics=json.dumps(result),
-            question=f"Interpret these {metric} statistics in business terms."
-        )
-        
-        response = generate_response("statistical interpretation", result)
-        return extract_text_from_response(response)
-    else:
+
+    def get_simple_interpretation():
+        """Provides a basic, non-LLM interpretation."""
         if "value" in result:
-            return f"The {metric} is ${result['value']:,.2f} based on {result['records_analyzed']} records"
+            return f"The {metric} is ${result['value']:,.2f} based on {result['records_analyzed']} records."
         else:
-            return f"Statistical analysis complete with {result['records_analyzed']} records"
+            # Handle 'all' case
+            mean = result.get('mean', 0)
+            median = result.get('median', 0)
+            return (f"Statistical analysis complete for {result['records_analyzed']} records. "
+                    f"Mean: ${mean:,.2f}, Median: ${median:,.2f}.")
+
+    if LLM_AVAILABLE and FEATURES.get('grounded_prompts', False):
+        prompt_template_str = get_grounded_statistical_prompt()
+        llm_question = f"Interpret these {metric} statistics in business terms. Provide a summary, key findings, and business impact."
+
+        try:
+            llm_chain = get_llm_chain(prompt_template_str)
+
+            response = llm_chain.run({
+                "statistics": json.dumps(result, indent=2, default=str),
+                "question": llm_question
+            })
+
+            extracted_response = extract_text_from_response(response)
+
+            # Per user feedback, avoid silent fallbacks. If LLM gives a bad response, log it and use the simple one.
+            if not extracted_response or "insufficient data" in extracted_response.lower():
+                 logger.warning(f"LLM returned a low-quality interpretation. Raw response: {response}")
+                 return get_simple_interpretation()
+
+            return extracted_response
+
+        except Exception as e:
+            logger.error(f"LLM-based statistical interpretation failed: {e}")
+            return get_simple_interpretation()
+    else:
+        return get_simple_interpretation()
 
 # ============================================
 # DASHBOARD & REPORT FUNCTIONS WITH TEMPLATE SUPPORT
@@ -1118,3 +1141,87 @@ def combine_analysis_results(results: Dict) -> str:
             combined.append(f"{key}: {value['answer'][:100]}...")
     
     return "\n".join(combined) if combined else "Analysis complete"
+
+def get_strategic_recommendations(context: str = "cost optimization") -> Dict[str, Any]:
+    """
+    Get strategic recommendations based on data from the SQL database.
+    This is the primary implementation for recommendations, bypassing semantic search.
+    """
+    logger.info(f"Generating recommendations for context: {context}")
+
+    try:
+        top_spenders_query = f"""
+        SELECT "{VENDOR_COL}" as vendor, SUM(CAST("{COST_COL}" AS FLOAT)) as total_spending, COUNT(*) as order_count
+        FROM procurement
+        WHERE "{COST_COL}" IS NOT NULL
+        GROUP BY "{VENDOR_COL}"
+        ORDER BY total_spending DESC
+        LIMIT 10
+        """
+        top_spenders_df = safe_execute_query(top_spenders_query)
+
+        consolidation_candidates_query = f"""
+        SELECT "{VENDOR_COL}" as vendor, COUNT(*) as order_count, AVG(CAST("{COST_COL}" AS FLOAT)) as avg_order
+        FROM procurement
+        WHERE "{COST_COL}" IS NOT NULL
+        GROUP BY "{VENDOR_COL}"
+        HAVING order_count > 10 AND avg_order < 500
+        ORDER BY order_count DESC
+        LIMIT 10
+        """
+        consolidation_df = safe_execute_query(consolidation_candidates_query)
+
+    except Exception as e:
+        logger.error(f"Failed to query data for recommendations: {e}")
+        return {"error": "Database query for recommendations failed.", "answer": "Could not retrieve data to generate recommendations."}
+
+    data_context = {
+        "focus_area": context,
+        "top_10_vendors_by_spending": top_spenders_df.to_dict('records'),
+        "potential_consolidation_candidates": consolidation_df.to_dict('records')
+    }
+
+    if top_spenders_df.empty and consolidation_df.empty:
+        return {
+            "answer": "I was unable to find sufficient data to generate recommendations for your specified context.",
+            "records_analyzed": 0,
+            "source": "SQL"
+        }
+
+    if not LLM_AVAILABLE:
+        logger.warning("LLM not available, returning basic recommendations.")
+        # Basic non-LLM recommendations
+        recs = []
+        if not consolidation_df.empty:
+            recs.append(f"Consider consolidating up to {len(consolidation_df)} vendors with many small orders.")
+        if not top_spenders_df.empty:
+            recs.append(f"Review spending with top vendors like {top_spenders_df.iloc[0]['vendor']} for potential savings.")
+        return {"answer": "\n".join(recs) if recs else "No specific recommendations generated."}
+
+    try:
+        prompt = get_grounded_recommendation_prompt().format(
+            context=json.dumps(data_context, indent=2),
+            focus=context,
+            question=f"Generate recommendations for {context} based on the provided data."
+        )
+
+        llm_chain = get_llm_chain(prompt)
+        llm_response = llm_chain.run({})
+        response_text = extract_text_from_response(llm_response)
+
+        if not response_text or "insufficient" in response_text.lower():
+            response_text = "Based on the available data, no specific recommendations could be generated by the LLM."
+
+        return {
+            "answer": response_text,
+            "summary": response_text,
+            "records_analyzed": len(top_spenders_df) + len(consolidation_df),
+            "confidence": 85,
+            "source": "SQL-Grounded RAG",
+            "recommendation_type": context,
+            "grounded_recommendation": True,
+            "template_parsing": FEATURES.get('template_parsing', False)
+        }
+    except Exception as e:
+        logger.error(f"LLM call for recommendations failed: {e}")
+        return {"error": "Failed to generate recommendations from the language model."}

@@ -22,7 +22,7 @@ DATE_COL = "DATE_COLUMN"  # If exists
 # ============================================
 # DATA SOURCE
 # ============================================
-CSV_PATH = "data/Purchase_Orders_and_Contracts.csv"
+CSV_PATH = "data/temp_data.csv"
 
 # ============================================
 # CACHE CONFIGURATION
@@ -444,7 +444,7 @@ VENDOR_SUFFIXES = [
 # Known Vendor Mappings
 KNOWN_VENDOR_MAPPINGS = {
     "DELL": ["DELL", "DELL INC", "DELL TECHNOLOGIES", "DELL COMPUTER", "DELL COMPUTERS", "DELL EMC", "DELL COMPUTER CORP"],
-    "IBM": ["IBM", "INTERNATIONAL BUSINESS MACHINES", "IBM CORPORATION", "I.B.M.", "IBM CORP", "IBM GLOBAL"],
+    "IBM": ["IBM", "INTERNATIONAL BUSINESS MACHINES", "IBM CORPORATION", "I.B.M.", "IBM CORP", "IBM GLOBAL", "I B M", "I.B.M"],
     "MICROSOFT": ["MICROSOFT", "MICROSOFT CORPORATION", "MICROSOFT CORP", "MSFT", "MICROSOFT INC"],
     "ORACLE": ["ORACLE", "ORACLE CORPORATION", "ORACLE CORP", "ORACLE AMERICA", "ORACLE USA"],
     "HP": ["HP", "HEWLETT PACKARD", "HEWLETT-PACKARD", "HP INC", "HPE", "HP ENTERPRISE", "HEWLETT PACKARD ENTERPRISE"],

@@ -90,10 +90,12 @@ except ImportError as e:
     logger.warning(f"LLM Query Decomposer not available: {e}")
 
 # Check for enhanced RAG
+from app_helpers import get_strategic_recommendations
+
 try:
     from rag_logic import (
         get_rag_processor, analyze_vendor_semantic, 
-        get_recommendations, compare_vendors_semantic
+        compare_vendors_semantic
     )
     ENHANCED_RAG_AVAILABLE = True
 except ImportError as e:
@@ -663,7 +665,7 @@ def dashboard():
 @app.route('/recommend', methods=['POST'])
 def recommend():
     """
-    Generate strategic recommendations using grounded recommendation prompts with templates.
+    Generate strategic recommendations using a robust, SQL-grounded approach.
     """
     try:
         data = request.json
@@ -672,29 +674,8 @@ def recommend():
         
         context = data.get('context')
         
-        # Use enhanced RAG with grounded prompts
-        if ENHANCED_RAG_AVAILABLE:
-            raw_recommendations = get_recommendations(context)
-            # Extract template content
-            if 'recommendations' in raw_recommendations:
-                if isinstance(raw_recommendations['recommendations'], list):
-                    raw_recommendations['recommendations'] = [
-                        extract_text_from_response(rec) for rec in raw_recommendations['recommendations']
-                    ]
-                else:
-                    raw_recommendations['recommendations'] = extract_text_from_response(
-                        raw_recommendations['recommendations']
-                    )
-            recommendations = raw_recommendations
-        else:
-            # Fallback to dashboard recommendations
-            recommendations = {
-                'recommendations': [
-                    extract_text_from_response(rec) 
-                    for rec in generate_dashboard_recommendations()
-                ],
-                'context': context
-            }
+        # Use the robust, SQL-grounded recommendation function from app_helpers
+        recommendations = get_strategic_recommendations(context)
         
         recommendations['template_parsing'] = FEATURES.get('template_parsing', False)
         
